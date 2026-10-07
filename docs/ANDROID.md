@@ -1,0 +1,119 @@
+# Earworm for Android
+
+Earworm also comes as an Android app (an APK you install yourself). Everything runs **on your phone**: no server to host and nothing to pay. It's made for one listener, so the friends features (the Friends feed, People, followers) are only on the web version.
+
+Your likes, saves, comments and favourites are stored on the phone. They survive app updates, and Android's automatic backup includes them.
+
+## Install it
+
+1. On your Android phone, open the [latest build](https://github.com/szymonbite/Music/releases/tag/android-latest) and tap **earworm.apk**.
+2. Open the download. Android asks whether your browser may install apps. Allow it.
+3. Google Play Protect may warn that it doesn't know this app, because it isn't from the Play Store. Choose **More details → Install anyway**.
+4. Open **Earworm**.
+
+To update, install the newest `earworm.apk` the same way. It installs over the old version and keeps your data.
+
+A new build is made automatically whenever code is pushed to the repository ([GitHub Actions](../.github/workflows/android.yml)).
+
+## Connect YouTube Music (one-time Google setup)
+
+Earworm works without this, using its built-in catalogue. Connecting YouTube Music adds these:
+
+- Import your liked songs and playlists.
+- Search YouTube.
+- Mirror your likes and saves to YouTube Music.
+- Get fresh recommendations.
+
+The app uses Android's own Google account picker. Google first needs to know the app exists, so do this once (about 10 minutes):
+
+1. In the [Google Cloud Console](https://console.cloud.google.com/), create a project or reuse the one from the web version. Under **APIs & Services → Library**, enable **YouTube Data API v3**.
+2. Set up the **OAuth consent screen**:
+   - Choose **External**.
+   - Add the scopes `openid`, `…/auth/userinfo.email`, `…/auth/userinfo.profile` and `…/auth/youtube`.
+   - Under **Test users**, add your Google account.
+3. Go to **Credentials → Create credentials → OAuth client ID** and fill in:
+   - Application type: **Android**
+   - Package name: `io.github.szymonbite.earworm`
+   - SHA-1 certificate fingerprint: `B2:B8:6F:86:67:9A:A1:3A:F1:9D:56:B5:9F:D4:AB:EB:DE:CD:DC:85`
+4. In the app, open **Me → Connect YouTube Music**, pick your account and allow access.
+
+That's all. There's no client secret, and nothing to type into the app. Google can take a few minutes to recognise a new client.
+
+> **The 7-day catch** from the web version applies here too. While the consent screen is in **Testing**, Google may ask you to sign in again after a week. Earworm shows a **Reconnect** banner, and one tap fixes it. Clicking **Publish app** on the consent screen avoids it. For personal use you don't need Google's verification: you'll see a "Google hasn't verified this app" warning once and continue via **Advanced**.
+
+## What's different from the website
+
+- **Just you.** There's no Friends tab, People page or followers. Comments work as notes to yourself.
+- **Share** gives a YouTube Music link, since the app has no web address of its own.
+- **Erase my data** (on the Me tab) replaces "Start over". It deletes everything on the phone. Anything already synced to YouTube Music stays there.
+- **Searching YouTube and pasting links** need a connected YouTube Music account, because the app has no API key of its own. See [Optional keys](#optional-keys).
+- **Similar artists** come from Deezer's public API.
+
+## How it works
+
+The app runs the same code as the web server: its routes, recommender and YouTube sync. The difference is where that code runs:
+
+- **Backend:** it runs inside the app ([`src/local/`](../src/local)), with SQLite compiled to WebAssembly ([sql.js](https://sql.js.org)). The database is saved to the phone's storage about a second after each change, and right away when you leave the app.
+- **App shell:** [Capacitor](https://capacitorjs.com) wraps the web app.
+- **Network:** calls to YouTube, Google and Deezer go through Android's HTTP stack, so browser CORS rules don't get in the way.
+- **Google sign-in** uses Google Play services ([`GoogleAuthPlugin.java`](../android/app/src/main/java/io/github/szymonbite/earworm/GoogleAuthPlugin.java)). Google blocks its web sign-in page inside apps.
+- **Songs** play through YouTube's official player. The app identifies itself to YouTube as `https://io.github.szymonbite.earworm`, which YouTube requires for players inside apps.
+
+## Signing key
+
+Every build is signed with [`android/app/earworm.keystore`](../android/app/earworm.keystore) (password `earworm`). That keeps two things working:
+
+- Updates install over each other.
+- Google keeps recognising the app (the SHA-1 above).
+
+Because this repository is public, anyone could sign an app with that key. So only install Earworm APKs from your own releases.
+
+To switch to a private key:
+
+1. Make a keystore:
+
+   ```bash
+   keytool -genkeypair -keystore my.keystore -alias earworm -keyalg RSA -keysize 2048 -validity 36500
+   ```
+
+2. Add these as repository secrets (**Settings → Secrets and variables → Actions**):
+   - `ANDROID_KEYSTORE_BASE64`: the file, base64-encoded
+   - `ANDROID_KEYSTORE_PASSWORD`
+   - `ANDROID_KEY_ALIAS`
+   - `ANDROID_KEY_PASSWORD`
+3. Replace the SHA-1 in Google Cloud with your key's. Run `keytool -list -v -keystore my.keystore` to see it.
+
+Android won't install an app signed with a different key over the old one. You'd have to uninstall first, which deletes the app's data. So switch keys before you start relying on the app.
+
+## Optional keys
+
+Two repository secrets get built into the app if you add them:
+
+- `YOUTUBE_API_KEY`: lets search work before you connect an account.
+- `LASTFM_API_KEY`: better similar artists.
+
+The APK on the releases page is public, so anyone could pull these keys out of it. If you add a YouTube key, restrict it to **YouTube Data API v3** in Google Cloud.
+
+## Build it yourself
+
+You need Node.js 22.13+, JDK 21 and the Android SDK (Android Studio includes both):
+
+```bash
+npm ci
+npm run android:sync          # builds the app's web bundle and copies it into android/
+cd android && ./gradlew assembleRelease
+# → android/app/build/outputs/apk/release/app-release.apk
+```
+
+Or run `npx cap open android` to open the project in Android Studio and run it on a phone connected by USB.
+
+The app's web bundle also runs in a desktop browser for development and tests: `npm run build:app && npx vite preview --mode app`. Its browser tests are in [`e2e/android-app.spec.ts`](../e2e/android-app.spec.ts).
+
+## Troubleshooting
+
+| What you see | What to do |
+| --- | --- |
+| "Google doesn't recognise this app yet" | Check the Android OAuth client: the package name and SHA-1 must match exactly. It must be in the same Google Cloud project as the consent screen. Give Google a few minutes after creating it. |
+| "Access blocked" or "app not verified" while connecting | Add your Google account under **Test users** on the consent screen, or publish the app. |
+| Songs don't play (YouTube "error 153" or 152) | YouTube rejected the player. Update **Android System WebView** and **Chrome** from the Play Store, and make sure you're on the latest Earworm build. |
+| A song says it can't be played here | Some videos aren't allowed in other apps. Earworm skips them automatically. |

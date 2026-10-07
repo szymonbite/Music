@@ -35,10 +35,19 @@ export class ApiError extends Error {
   }
 }
 
+type Transport = (url: string, init: RequestInit) => Promise<Response>;
+
+let transport: Transport = (url, init) => fetch(url, init);
+
+/** Sends API calls somewhere other than the network: the Android app's built-in backend. */
+export function setApiTransport(next: Transport): void {
+  transport = next;
+}
+
 async function request<T>(method: string, path: string, body?: unknown, init?: RequestInit): Promise<T> {
   let res: Response;
   try {
-    res = await fetch(`/api${path}`, {
+    res = await transport(`/api${path}`, {
       method,
       credentials: 'same-origin',
       headers: body === undefined ? undefined : { 'Content-Type': 'application/json' },
@@ -64,6 +73,8 @@ export const api = {
   updateMe: (patch: MePatch) => request<MeResponse>('PATCH', '/me', patch),
   logout: () => request<void>('POST', '/auth/logout'),
   disconnectYouTube: () => request<MeResponse>('POST', '/auth/google/disconnect'),
+  /** Android app only: connects YouTube Music through Google's account picker. */
+  connectYouTubeNative: () => request<MeResponse>('POST', '/auth/native'),
 
   feed: (req: FeedRequest) => request<FeedResponse>('POST', '/feed', req),
   song: (id: string) => request<FeedItem>('GET', `/songs/${enc(id)}`),

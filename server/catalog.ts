@@ -1,5 +1,5 @@
-import fs from 'node:fs';
 import { isVideoId } from '../shared/youtube.ts';
+import catalogJson from './data/catalog.json' with { type: 'json' };
 import { transaction, type DB } from './db.ts';
 import { decadeTag } from './music.ts';
 import { upsertSong } from './songs.ts';
@@ -13,15 +13,12 @@ export interface CatalogEntry {
   tags: string[];
 }
 
-const CATALOG_FILE = new URL('./data/catalog.json', import.meta.url);
-
 function isStringList(value: unknown): value is string[] {
   return Array.isArray(value) && value.every((v) => typeof v === 'string');
 }
 
-/** Reads and validates the built-in song catalogue. Invalid entries are skipped. */
-export function loadCatalog(file: URL | string = CATALOG_FILE): CatalogEntry[] {
-  const raw: unknown = JSON.parse(fs.readFileSync(file, 'utf8'));
+/** Validates the built-in song catalogue (or another list in the same format). Invalid entries are skipped. */
+export function loadCatalog(raw: unknown = catalogJson): CatalogEntry[] {
   if (!Array.isArray(raw)) throw new Error('catalog.json must contain an array');
   const seen = new Set<string>();
   const entries: CatalogEntry[] = [];

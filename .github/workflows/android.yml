@@ -1,0 +1,86 @@
+# Builds the Earworm Android app (an APK you can install on your phone) on every push.
+# Builds of the default branch are published as the "android-latest" release, so the
+# newest APK is always at:
+#   https://github.com/<owner>/<repo>/releases/download/android-latest/earworm.apk
+# See docs/ANDROID.md.
+
+name: Android app
+
+on:
+  push:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: android-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  apk:
+    name: Build the APK
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck, lint and test
+        run: npm run check
+
+      - name: Build the app and copy it into the Android project
+        run: npm run android:sync
+        env:
+          # Optional repository secrets. Anything here ends up inside the APK.
+          VITE_YOUTUBE_API_KEY: ${{ secrets.YOUTUBE_API_KEY }}
+          VITE_LASTFM_API_KEY: ${{ secrets.LASTFM_API_KEY }}
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Build the APK
+        working-directory: android
+        env:
+          EARWORM_VERSION_CODE: ${{ github.run_number }}
+          EARWORM_VERSION_NAME: 1.0.${{ github.run_number }}
+          # Optional: sign with your own key instead of android/app/earworm.keystore.
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          EARWORM_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          EARWORM_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          EARWORM_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          if [ -n "$ANDROID_KEYSTORE_BASE64" ]; then
+            echo "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/release.keystore"
+            export EARWORM_KEYSTORE_FILE="$RUNNER_TEMP/release.keystore"
+          fi
+          ./gradlew assembleRelease --no-daemon --stacktrace
+          cp app/build/outputs/apk/release/app-release.apk "$GITHUB_WORKSPACE/earworm.apk"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: earworm-apk
+          path: earworm.apk
+
+      - name: Publish as the "android-latest" release
+        if: github.ref_name == github.event.repository.default_branch
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release delete android-latest --yes --cleanup-tag || true
+          gh release create android-latest earworm.apk \
+            --prerelease \
+            --target "$GITHUB_SHA" \
+            --title "Earworm for Android (latest build)" \
+            --notes "Open this page on your Android phone, tap **earworm.apk**, then open the download to install it. Updates install over the previous version and keep your data. Setup and details: [docs/ANDROID.md](https://github.com/${{ github.repository }}/blob/${{ github.sha }}/docs/ANDROID.md). Built from ${{ github.sha }}."

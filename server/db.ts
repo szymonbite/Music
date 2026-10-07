@@ -1,29 +1,22 @@
-import fs from 'node:fs';
-import { createRequire } from 'node:module';
-import path from 'node:path';
-import type { DatabaseSync, SQLInputValue, StatementSync } from 'node:sqlite';
+// Database helpers shared by the server (Node's built-in SQLite, see sqlite.ts)
+// and the Android app (SQLite compiled to WebAssembly, see src/local/sqljs.ts).
 
-export type DB = DatabaseSync;
+export type SqlValue = null | number | bigint | string | Uint8Array;
+export type Params = SqlValue[] | Record<string, SqlValue>;
 
-/**
- * Loads Node's built-in SQLite module, hiding the one-off "experimental
- * feature" warning it prints. Loaded lazily so the filter is in place first.
- */
-function loadSqlite(): typeof import('node:sqlite') {
-  const require = createRequire(import.meta.url);
-  const original = process.emitWarning;
-  process.emitWarning = ((warning: string | Error, ...rest: unknown[]) => {
-    const message = typeof warning === 'string' ? warning : warning.message;
-    if (message.includes('SQLite is an experimental feature')) return;
-    (original as (...args: unknown[]) => void).call(process, warning, ...rest);
-  }) as typeof process.emitWarning;
-  try {
-    return require('node:sqlite') as typeof import('node:sqlite');
-  } finally {
-    process.emitWarning = original;
-  }
+/** The part of node:sqlite's StatementSync that Earworm uses. */
+export interface Statement {
+  run(...params: unknown[]): { changes: number | bigint; lastInsertRowid: number | bigint };
+  get(...params: unknown[]): unknown;
+  all(...params: unknown[]): unknown[];
 }
-export type Params = SQLInputValue[] | Record<string, SQLInputValue>;
+
+/** The part of node:sqlite's DatabaseSync that Earworm uses. */
+export interface DB {
+  exec(sql: string): void;
+  prepare(sql: string): Statement;
+  close(): void;
+}
 
 /** Schema migrations, applied in order. Never edit a shipped migration; append a new one. */
 const MIGRATIONS: string[] = [
@@ -194,16 +187,8 @@ const MIGRATIONS: string[] = [
   `,
 ];
 
-export function openDb(file: string): DB {
-  if (file !== ':memory:') fs.mkdirSync(path.dirname(file), { recursive: true });
-  const db = new (loadSqlite().DatabaseSync)(file);
-  db.exec('PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;');
-  if (file !== ':memory:') db.exec('PRAGMA journal_mode = WAL;');
-  migrate(db);
-  return db;
-}
-
-function migrate(db: DB): void {
+/** Brings the schema up to date. */
+export function migrate(db: DB): void {
   const { user_version: version } = get<{ user_version: number }>(db, 'PRAGMA user_version')!;
   for (let i = version; i < MIGRATIONS.length; i++) {
     transaction(db, () => {
@@ -213,9 +198,9 @@ function migrate(db: DB): void {
   }
 }
 
-const statements = new WeakMap<DB, Map<string, StatementSync>>();
+const statements = new WeakMap<DB, Map<string, Statement>>();
 
-function prepare(db: DB, sql: string): StatementSync {
+function prepare(db: DB, sql: string): Statement {
   let byDb = statements.get(db);
   if (!byDb) {
     byDb = new Map();

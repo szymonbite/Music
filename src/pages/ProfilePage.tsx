@@ -1,10 +1,12 @@
 import { useEffect, useState, type FormEvent } from 'react';
 import type { UserSettings } from '../../shared/types.ts';
-import { api, connectYouTubeUrl } from '../api.ts';
+import { api } from '../api.ts';
 import { Avatar } from '../components/Avatar.tsx';
 import { Icon } from '../components/Icon.tsx';
 import { Switch } from '../components/Switch.tsx';
 import { errorMessage } from '../lib/format.ts';
+import { useConnectYouTube } from '../lib/useConnectYouTube.ts';
+import { APP_MODE } from '../platform.ts';
 import { Link } from '../router.tsx';
 import { useSession } from '../session.tsx';
 import { useToast } from '../toast.tsx';
@@ -31,6 +33,7 @@ const SHORTCUTS: [string, string][] = [
 export function ProfilePage() {
   const { me, features, update, replace, refresh } = useSession();
   const toast = useToast();
+  const connectYouTube = useConnectYouTube();
   const [name, setName] = useState(me.displayName);
   const [busy, setBusy] = useState(false);
 
@@ -76,10 +79,18 @@ export function ProfilePage() {
     }
   };
 
+  const connect = async () => {
+    setBusy(true);
+    await connectYouTube('/me');
+    setBusy(false);
+  };
+
   const signOut = async () => {
-    const message = me.youtube
-      ? 'Sign out? Connect the same YouTube Music account to get back in.'
-      : 'Start over? You haven’t connected an account, so your likes, saves and comments can’t be recovered.';
+    const message = APP_MODE
+      ? 'Erase everything? Your likes, saves, comments and favourites on this phone will be deleted. Anything already synced to YouTube Music stays there.'
+      : me.youtube
+        ? 'Sign out? Connect the same YouTube Music account to get back in.'
+        : 'Start over? You haven’t connected an account, so your likes, saves and comments can’t be recovered.';
     if (!window.confirm(message)) return;
     try {
       await api.logout();
@@ -110,15 +121,19 @@ export function ProfilePage() {
             onBlur={() => void saveName()}
           />
         </form>
-        <dl className="stats">
-          <div>
-            <dt>Followers</dt>
-            <dd>{me.counts.followers}</dd>
-          </div>
-          <div>
-            <dt>Following</dt>
-            <dd>{me.counts.following}</dd>
-          </div>
+        <dl className={features.social ? 'stats' : 'stats stats--solo'}>
+          {features.social && (
+            <>
+              <div>
+                <dt>Followers</dt>
+                <dd>{me.counts.followers}</dd>
+              </div>
+              <div>
+                <dt>Following</dt>
+                <dd>{me.counts.following}</dd>
+              </div>
+            </>
+          )}
           <div>
             <dt>Likes</dt>
             <dd>{me.counts.likes}</dd>
@@ -137,9 +152,11 @@ export function ProfilePage() {
           </div>
         </dl>
         <div className="profile__actions">
-          <Link to="/people" className="btn btn--small btn--primary">
-            <Icon name="user" size={16} /> Find people
-          </Link>
+          {features.social && (
+            <Link to="/people" className="btn btn--small btn--primary">
+              <Icon name="user" size={16} /> Find people
+            </Link>
+          )}
           <Link to="/pick" className="btn btn--small">
             <Icon name="heart" size={16} /> Edit favourite songs
           </Link>
@@ -187,13 +204,15 @@ export function ProfilePage() {
             ) : (
               <p className="muted">Import your liked songs and playlists, and keep likes and saves in sync with YouTube Music.</p>
             )}
-            <a className="btn btn--youtube" href={connectYouTubeUrl('/me')}>
+            <button type="button" className="btn btn--youtube" disabled={busy} onClick={() => void connect()}>
               <Icon name="music" size={20} /> {me.youtubeExpired ? 'Reconnect YouTube Music' : 'Connect YouTube Music'}
-            </a>
+            </button>
           </>
         ) : (
           <p className="muted">
-            Not set up on this server yet. Whoever runs Earworm needs to add Google OAuth credentials (see the README).
+            {APP_MODE
+              ? 'Connecting YouTube Music works in the Android app.'
+              : 'Not set up on this server yet. Whoever runs Earworm needs to add Google OAuth credentials (see the README).'}
           </p>
         )}
       </section>
@@ -232,33 +251,37 @@ export function ProfilePage() {
         )}
       </section>
 
-      <section className="card-section" aria-labelledby="privacy-heading">
-        <h2 id="privacy-heading">Privacy</h2>
-        <Switch
-          label="Show my likes & saves to followers"
-          description="They appear on your profile and in your followers’ Friends feed."
-          checked={me.settings.shareActivity}
-          onChange={(v) => void setSetting({ shareActivity: v })}
-        />
-      </section>
+      {features.social && (
+        <section className="card-section" aria-labelledby="privacy-heading">
+          <h2 id="privacy-heading">Privacy</h2>
+          <Switch
+            label="Show my likes & saves to followers"
+            description="They appear on your profile and in your followers’ Friends feed."
+            checked={me.settings.shareActivity}
+            onChange={(v) => void setSetting({ shareActivity: v })}
+          />
+        </section>
+      )}
 
-      <section className="card-section shortcuts-section" aria-labelledby="keys-heading">
-        <h2 id="keys-heading">Keyboard shortcuts</h2>
-        <dl className="shortcuts">
-          {SHORTCUTS.map(([keys, action]) => (
-            <div key={keys} className="shortcuts__row">
-              <dt>
-                <kbd>{keys}</kbd>
-              </dt>
-              <dd>{action}</dd>
-            </div>
-          ))}
-        </dl>
-      </section>
+      {!APP_MODE && (
+        <section className="card-section shortcuts-section" aria-labelledby="keys-heading">
+          <h2 id="keys-heading">Keyboard shortcuts</h2>
+          <dl className="shortcuts">
+            {SHORTCUTS.map(([keys, action]) => (
+              <div key={keys} className="shortcuts__row">
+                <dt>
+                  <kbd>{keys}</kbd>
+                </dt>
+                <dd>{action}</dd>
+              </div>
+            ))}
+          </dl>
+        </section>
+      )}
 
       <section className="profile__footer">
         <button type="button" className="btn btn--ghost btn--block btn--danger" onClick={() => void signOut()}>
-          <Icon name="logout" size={18} /> {me.youtube ? 'Sign out' : 'Start over'}
+          <Icon name="logout" size={18} /> {APP_MODE ? 'Erase my data' : me.youtube ? 'Sign out' : 'Start over'}
         </button>
         <p className="fineprint">Songs play through the official YouTube player. Earworm isn’t affiliated with YouTube or Google.</p>
       </section>

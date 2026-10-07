@@ -983,8 +983,13 @@ kbd {
 }
 
 .reconnect__action {
+  padding: 6px 4px;
+  border: 0;
+  background: none;
   color: #fff;
+  font: inherit;
   font-weight: 700;
+  cursor: pointer;
 }
 
 .reconnect__close {
@@ -1815,6 +1820,10 @@ button.comment__author:hover {
   gap: 8px;
   width: 100%;
   margin: 4px 0;
+}
+
+.stats--solo {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
 }
 
 .stats div {

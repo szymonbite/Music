@@ -24,7 +24,7 @@ describe('sessions', () => {
       counts: { favorites: 0, likes: 0, saves: 0, comments: 0, followers: 0, following: 0 },
     });
     expect(first.body.me.displayName).toMatch(/^Listener \d{4}$/);
-    expect(first.body.features).toEqual({ youtubeLogin: false, youtubeSearch: false });
+    expect(first.body.features).toEqual({ youtubeLogin: false, youtubeSearch: false, social: true });
 
     const second = await agent.get('/api/me').expect(200);
     expect(second.body.me.id).toBe(first.body.me.id);

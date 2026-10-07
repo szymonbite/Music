@@ -104,6 +104,8 @@ export interface Features {
   youtubeLogin: boolean;
   /** A YouTube Data API key is configured, so search works for everyone. */
   youtubeSearch: boolean;
+  /** Other listeners exist: following, the Friends feed and profiles. Off in the single-listener Android app. */
+  social: boolean;
 }
 
 export interface MeResponse {

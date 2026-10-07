@@ -52,12 +52,12 @@ const ROUTES: Record<string, () => ReactNode> = {
 const WITH_NAV = new Set(['/', '/library', '/me', '/people']);
 
 function Shell() {
-  const { me } = useSession();
+  const { me, features } = useSession();
   const { path, search } = useRouter();
   useOAuthNotice();
 
   const route = ROUTES[path];
-  if (!route) return <Redirect to="/" />;
+  if (!route || (path === '/people' && !features.social)) return <Redirect to="/" />;
   // Shared song links play straight away, even before onboarding.
   const sharedSong = path === '/' && search.has('song');
   if (!me.onboarded && path !== '/welcome' && path !== '/pick' && !sharedSong) return <Redirect to="/welcome" />;

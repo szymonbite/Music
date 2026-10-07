@@ -8,7 +8,11 @@ import { cleanDisplayName, getUser, parseSettings, sanitizeSettings, toMe, type 
 import { body } from '../validate.ts';
 
 export function meResponse(ctx: AppContext, user: UserRow): MeResponse {
-  const features: Features = { youtubeLogin: ctx.youtube.loginEnabled, youtubeSearch: ctx.youtube.searchEnabled };
+  const features: Features = {
+    youtubeLogin: ctx.youtube.loginEnabled,
+    youtubeSearch: ctx.youtube.searchEnabled,
+    social: ctx.config.social,
+  };
   return { me: toMe(ctx.db, user), features };
 }
 

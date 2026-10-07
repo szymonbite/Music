@@ -22,6 +22,8 @@ export interface AppConfig {
     provider: 'lastfm' | 'deezer' | 'off';
     lastfmApiKey: string | null;
   };
+  /** Following, the Friends feed and profiles (the server always has them; the Android app is single-listener). */
+  social: boolean;
 }
 
 function nonEmpty(value: string | undefined): string | null {
@@ -72,5 +74,6 @@ export function loadConfig(
       dailySearchBudget: Math.max(0, Number(env.YOUTUBE_DAILY_SEARCH_BUDGET ?? 30) || 0),
     },
     similarArtists: { provider: similarProvider, lastfmApiKey },
+    social: true,
   };
 }

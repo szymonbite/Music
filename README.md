@@ -6,6 +6,8 @@
 
 ![Hook preview in the feed, the Friends feed, a comment thread with likes and replies, and a friend's profile](docs/screenshots-social.png)
 
+**📱 Android app:** Earworm also runs as an Android app that keeps everything on your phone, with no server needed. [Install it and set it up →](docs/ANDROID.md)
+
 <sub>Screenshots come from the end-to-end test harness, which uses placeholder artwork and a fake player because YouTube isn't reachable from CI. In a browser you get real thumbnails and music videos.</sub>
 
 ## What it does
@@ -122,8 +124,10 @@ The **Friends** feed is simpler: songs the people you follow liked or saved, mos
 | ------------------- | -------------------------------------------------------------------- |
 | `npm run dev`       | API + React app with hot reload on one port (default 3000)           |
 | `npm run build`     | Build the web client into `dist/`                                    |
+| `npm run build:app` | Build the Android app's web bundle (with its built-in backend) into `dist-app/` |
+| `npm run android:sync` | `build:app`, then copy it into the Android project (`android/`)   |
 | `npm start`         | Serve the built app in production mode                               |
-| `npm test`          | Unit, API and component tests (Vitest)                               |
+| `npm test`          | Unit, API, component and Android-backend tests (Vitest)              |
 | `npm run test:e2e`  | Browser tests (Playwright, mobile Chromium). Run `npx playwright install chromium` once first |
 | `npm run check`     | Typecheck + lint + tests                                             |
 
@@ -148,6 +152,8 @@ All settings are environment variables and all are optional. See [`.env.example`
 | `TRUST_PROXY`              | –                      | Set when behind a reverse proxy (e.g. `1`) |
 
 ## Deploying
+
+**Just for you, on Android?** Install the [Android app](docs/ANDROID.md) instead. It needs no server.
 
 **[docs/DEPLOY.md](docs/DEPLOY.md)** walks through putting Earworm on [Fly.io](https://fly.io) for a group of friends. It's one small machine that sleeps when idle, plus a 1 GB disk, for about $2–3 a month. The repo includes a ready [`Dockerfile`](Dockerfile) and [`fly.toml`](fly.toml).
 
@@ -175,15 +181,18 @@ server/                 Express API (TypeScript, run with tsx)
   similar.ts            Similar artists from Last.fm or Deezer, cached in SQLite
   youtube/client.ts     Google OAuth + YouTube Data API v3 client (fetch-based)
   youtube/service.ts    Token refresh, library import, sync, search, discovery
-  db.ts                 node:sqlite helpers and schema migrations
+  db.ts                 Database helpers and schema migrations (sqlite.ts opens node:sqlite)
   data/catalog.json     The built-in song catalogue
 src/                    React 19 web app (Vite)
   components/Feed.tsx   The snap-scrolling feed
   lib/feedPlayer.ts     One shared YouTube IFrame player for the whole feed
   pages/                Welcome, pick favourites, library, people, profile
+  local/                The Android app's built-in backend: the server code on sql.js, plus Android bits
 shared/                 Types and helpers used by both sides
-e2e/                    Playwright tests and the fake YouTube player
+android/                The Android app (Capacitor), including Google sign-in via Play services
+e2e/                    Playwright tests (web and Android app bundle) and the fake YouTube player
 docs/DEPLOY.md          Step-by-step hosting guide (Fly.io)
+docs/ANDROID.md         Installing and setting up the Android app
 ```
 
 ## Notes and limitations

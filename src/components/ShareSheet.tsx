@@ -1,11 +1,14 @@
 import type { Song } from '../../shared/types.ts';
 import { youtubeMusicUrl, youtubeUrl } from '../../shared/youtube.ts';
+import { APP_MODE } from '../platform.ts';
 import { useToast } from '../toast.tsx';
 import { Icon } from './Icon.tsx';
 import { Sheet } from './Sheet.tsx';
 import { Thumb } from './Thumb.tsx';
 
 export function songLink(songId: string): string {
+  // The Android app has no web address of its own to share, so point at YouTube Music.
+  if (APP_MODE) return youtubeMusicUrl(songId);
   return `${window.location.origin}/?song=${encodeURIComponent(songId)}`;
 }
 

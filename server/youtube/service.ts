@@ -103,6 +103,12 @@ export interface YouTubeServiceDeps {
   discoverySearch: boolean;
   /** Max discovery searches per day. */
   dailySearchBudget: number;
+  /**
+   * Gets a fresh access token when the stored one runs out, instead of using a
+   * refresh token. The Android app uses this: Google Play services holds the
+   * grant there. Resolves to null when the listener has to sign in again.
+   */
+  renewToken?: (user: UserRow) => Promise<TokenResponse | null>;
 }
 
 export class YouTubeService {
@@ -111,6 +117,7 @@ export class YouTubeService {
   private readonly now: () => number;
   private readonly discoverySearch: boolean;
   private readonly dailySearchBudget: number;
+  private readonly renewToken: YouTubeServiceDeps['renewToken'];
 
   constructor(deps: YouTubeServiceDeps) {
     this.db = deps.db;
@@ -118,10 +125,11 @@ export class YouTubeService {
     this.now = deps.now;
     this.discoverySearch = deps.discoverySearch;
     this.dailySearchBudget = deps.dailySearchBudget;
+    this.renewToken = deps.renewToken;
   }
 
   get loginEnabled(): boolean {
-    return this.client.oauthEnabled;
+    return this.client.oauthEnabled || this.renewToken !== undefined;
   }
 
   get searchEnabled(): boolean {
@@ -135,12 +143,17 @@ export class YouTubeService {
     profile: GoogleUserInfo;
   }> {
     const tokens = await this.client.exchangeCode(opts);
+    return { tokens, profile: await this.verifiedProfile(tokens) };
+  }
+
+  /** Checks that the YouTube permission was granted, then looks up who signed in. */
+  async verifiedProfile(tokens: TokenResponse): Promise<GoogleUserInfo> {
     if (tokens.scope && !tokens.scope.split(/\s+/).includes(YOUTUBE_SCOPE)) {
       throw new HttpError(403, 'youtube_scope_missing', 'Earworm needs permission to manage your YouTube account to sync with YouTube Music.');
     }
     const profile = await this.client.userInfo(tokens.access_token);
     if (!profile.sub) throw new HttpError(502, 'google_profile', 'Google didn’t return an account id');
-    return { tokens, profile };
+    return profile;
   }
 
   /** Stores the Google identity and tokens on a user. */
@@ -217,21 +230,22 @@ export class YouTubeService {
     }
     const now = this.now();
     if (user.yt_access_token && (user.yt_token_expires_at ?? 0) - 60_000 > now) return user.yt_access_token;
+    if (this.renewToken) {
+      const tokens = await this.renewToken(user);
+      if (!tokens) {
+        this.markExpired(user);
+        throw new HttpError(409, 'youtube_reconnect', 'Your YouTube Music connection expired. Please connect again.');
+      }
+      this.storeAccessToken(user, tokens);
+      return tokens.access_token;
+    }
     if (!user.yt_refresh_token) {
       this.markExpired(user);
       throw new HttpError(409, 'youtube_reconnect', 'Your YouTube Music connection expired. Please connect again.');
     }
     try {
       const tokens = await this.client.refreshAccessToken(user.yt_refresh_token);
-      const expires = now + tokens.expires_in * 1000;
-      run(
-        this.db,
-        'UPDATE users SET yt_access_token = ?, yt_token_expires_at = ?, yt_refresh_token = COALESCE(?, yt_refresh_token) WHERE id = ?',
-        [tokens.access_token, expires, tokens.refresh_token ?? null, user.id],
-      );
-      user.yt_access_token = tokens.access_token;
-      user.yt_token_expires_at = expires;
-      if (tokens.refresh_token) user.yt_refresh_token = tokens.refresh_token;
+      this.storeAccessToken(user, tokens);
       return tokens.access_token;
     } catch (err) {
       if (err instanceof YouTubeApiError && (err.reason === 'invalid_grant' || err.status === 400 || err.status === 401)) {
@@ -240,6 +254,18 @@ export class YouTubeService {
       }
       throw err;
     }
+  }
+
+  private storeAccessToken(user: UserRow, tokens: TokenResponse): void {
+    const expires = this.now() + tokens.expires_in * 1000;
+    run(
+      this.db,
+      'UPDATE users SET yt_access_token = ?, yt_token_expires_at = ?, yt_refresh_token = COALESCE(?, yt_refresh_token) WHERE id = ?',
+      [tokens.access_token, expires, tokens.refresh_token ?? null, user.id],
+    );
+    user.yt_access_token = tokens.access_token;
+    user.yt_token_expires_at = expires;
+    if (tokens.refresh_token) user.yt_refresh_token = tokens.refresh_token;
   }
 
   /** Runs a call with the user's token, refreshing and retrying once if Google says it's no longer valid. */

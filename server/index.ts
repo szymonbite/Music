@@ -5,7 +5,7 @@ import express from 'express';
 import { createApp } from './app.ts';
 import { loadCatalog, seedCatalog } from './catalog.ts';
 import { loadConfig } from './config.ts';
-import { openDb } from './db.ts';
+import { openDb } from './sqlite.ts';
 import { DeezerProvider, LastFmProvider, SimilarArtists } from './similar.ts';
 import { YouTubeClient } from './youtube/client.ts';
 import { YouTubeService } from './youtube/service.ts';

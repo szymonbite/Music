@@ -3,7 +3,7 @@ import { createApp } from '../app.ts';
 import { loadCatalog, seedCatalog, type CatalogEntry } from '../catalog.ts';
 import { loadConfig, type AppConfig } from '../config.ts';
 import type { AppContext } from '../context.ts';
-import { openDb } from '../db.ts';
+import { openDb } from '../sqlite.ts';
 import { SimilarArtists, type SimilarArtistsProvider } from '../similar.ts';
 import { YouTubeClient, type FetchLike } from '../youtube/client.ts';
 import { YouTubeService } from '../youtube/service.ts';

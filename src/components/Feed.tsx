@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { FeedItem, FeedMode, ReactionValue } from '../../shared/types.ts';
-import { api, connectYouTubeUrl } from '../api.ts';
+import { api } from '../api.ts';
 import { FeedPlayer, hookStart, usePlayerValue, type PlayerSnapshot } from '../lib/feedPlayer.ts';
 import { errorMessage, prefersReducedMotion } from '../lib/format.ts';
+import { useConnectYouTube } from '../lib/useConnectYouTube.ts';
+import { APP_MODE } from '../platform.ts';
 import { Link, useRouter } from '../router.tsx';
 import { useSession } from '../session.tsx';
 import { useToast } from '../toast.tsx';
@@ -27,9 +29,10 @@ type SheetState = { kind: 'comments' | 'share'; item: FeedItem } | { kind: 'user
  * single shared YouTube player sits on whichever card is in view.
  */
 export function Feed({ startWith, mode = 'forYou' }: { startWith: string | null; mode?: FeedMode }) {
-  const { me, update } = useSession();
+  const { me, features, update } = useSession();
   const { navigate } = useRouter();
   const toast = useToast();
+  const connectYouTube = useConnectYouTube();
   const [reconnectDismissed, setReconnectDismissed] = useState(false);
   const [player] = useState(() => new FeedPlayer());
   const [items, setItems] = useState<FeedItem[]>([]);
@@ -359,14 +362,16 @@ export function Feed({ startWith, mode = 'forYou' }: { startWith: string | null;
 
       <header className="feed-top">
         <Logo size={26} />
-        <div className="feed-tabs" role="tablist" aria-label="Feed">
-          <button type="button" role="tab" aria-selected={mode === 'friends'} className="feed-tabs__tab" onClick={() => switchMode('friends')}>
-            Friends
-          </button>
-          <button type="button" role="tab" aria-selected={mode === 'forYou'} className="feed-tabs__tab" onClick={() => switchMode('forYou')}>
-            For you
-          </button>
-        </div>
+        {features.social && (
+          <div className="feed-tabs" role="tablist" aria-label="Feed">
+            <button type="button" role="tab" aria-selected={mode === 'friends'} className="feed-tabs__tab" onClick={() => switchMode('friends')}>
+              Friends
+            </button>
+            <button type="button" role="tab" aria-selected={mode === 'forYou'} className="feed-tabs__tab" onClick={() => switchMode('forYou')}>
+              For you
+            </button>
+          </div>
+        )}
         <div className="feed-top__actions">
           <button
             type="button"
@@ -393,9 +398,9 @@ export function Feed({ startWith, mode = 'forYou' }: { startWith: string | null;
       {me.youtubeExpired && !reconnectDismissed && (
         <div className="reconnect" role="status">
           <span>Your YouTube Music connection expired.</span>
-          <a className="reconnect__action" href={connectYouTubeUrl('/')}>
+          <button type="button" className="reconnect__action" onClick={() => void connectYouTube('/')}>
             Reconnect
-          </a>
+          </button>
           <button type="button" className="icon-btn reconnect__close" aria-label="Dismiss" onClick={() => setReconnectDismissed(true)}>
             <Icon name="close" size={18} />
           </button>
@@ -443,10 +448,12 @@ export function Feed({ startWith, mode = 'forYou' }: { startWith: string | null;
           </div>
         ))}
 
-      <p className="feed-hints" aria-hidden="true">
-        <kbd>↑</kbd>
-        <kbd>↓</kbd> scroll · <kbd>Space</kbd> play · <kbd>L</kbd> like · <kbd>D</kbd> dislike · <kbd>S</kbd> save · <kbd>C</kbd> comments
-      </p>
+      {!APP_MODE && (
+        <p className="feed-hints" aria-hidden="true">
+          <kbd>↑</kbd>
+          <kbd>↓</kbd> scroll · <kbd>Space</kbd> play · <kbd>L</kbd> like · <kbd>D</kbd> dislike · <kbd>S</kbd> save · <kbd>C</kbd> comments
+        </p>
+      )}
 
       {sheet?.kind === 'comments' && (
         <CommentsSheet
@@ -455,7 +462,7 @@ export function Feed({ startWith, mode = 'forYou' }: { startWith: string | null;
           onCountChange={(delta) =>
             patchItem(sheet.item.id, (i) => ({ ...i, stats: { ...i.stats, comments: Math.max(0, i.stats.comments + delta) } }))
           }
-          onOpenUser={(userId) => setSheet({ kind: 'user', userId })}
+          onOpenUser={features.social ? (userId) => setSheet({ kind: 'user', userId }) : undefined}
         />
       )}
       {sheet?.kind === 'share' && <ShareSheet song={sheet.item} onClose={closeSheet} />}

@@ -44,7 +44,7 @@ const session: MeResponse = {
     youtubeExpired: false,
     counts: { favorites: 3, likes: 0, saves: 0, comments: 0, followers: 0, following: 0 },
   },
-  features: { youtubeLogin: false, youtubeSearch: false },
+  features: { youtubeLogin: false, youtubeSearch: false, social: true },
 };
 
 function comment(id: number, body: string, mine: boolean, extra: Partial<Comment> = {}): Comment {

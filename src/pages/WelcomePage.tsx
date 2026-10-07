@@ -1,8 +1,9 @@
 import { useState, type FormEvent } from 'react';
-import { connectYouTubeUrl } from '../api.ts';
 import { Icon } from '../components/Icon.tsx';
 import { Logo } from '../components/Logo.tsx';
 import { errorMessage } from '../lib/format.ts';
+import { useConnectYouTube } from '../lib/useConnectYouTube.ts';
+import { APP_MODE } from '../platform.ts';
 import { useRouter } from '../router.tsx';
 import { useSession } from '../session.tsx';
 import { useToast } from '../toast.tsx';
@@ -11,6 +12,7 @@ export function WelcomePage() {
   const { me, features, update } = useSession();
   const { navigate } = useRouter();
   const toast = useToast();
+  const connectYouTube = useConnectYouTube();
   const [name, setName] = useState(me.displayName);
   const [busy, setBusy] = useState(false);
 
@@ -39,10 +41,7 @@ export function WelcomePage() {
 
   const connect = async () => {
     setBusy(true);
-    if (await saveName()) {
-      window.location.assign(connectYouTubeUrl('/pick'));
-      return;
-    }
+    if (await saveName()) await connectYouTube('/pick');
     setBusy(false);
   };
 
@@ -62,7 +61,7 @@ export function WelcomePage() {
         <label className="field">
           <span className="field__label">What should we call you?</span>
           <input className="input" value={name} maxLength={30} onChange={(e) => setName(e.target.value)} autoComplete="nickname" />
-          <span className="field__hint">Shown next to your comments.</span>
+          <span className="field__hint">{features.social ? 'Shown next to your comments.' : 'You can change it later.'}</span>
         </label>
 
         {me.youtube ? (
@@ -81,8 +80,9 @@ export function WelcomePage() {
           </>
         ) : (
           <p className="notice">
-            Connecting a YouTube Music account isn’t set up on this server yet, so pick your favourites by hand. (Running it yourself? See
-            “Connect YouTube Music” in the README.)
+            {APP_MODE
+              ? 'Connecting YouTube Music needs the Android app, so pick your favourites by hand.'
+              : 'Connecting a YouTube Music account isn’t set up on this server yet, so pick your favourites by hand. (Running it yourself? See “Connect YouTube Music” in the README.)'}
           </p>
         )}
 
