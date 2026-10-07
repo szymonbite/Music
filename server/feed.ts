@@ -1,7 +1,17 @@
 import type { FeedItem } from '../shared/types.ts';
 import { all, type DB } from './db.ts';
-import { buildProfile, pickFeed, SIGNAL_WEIGHTS, type Candidate, type TasteSignal } from './recommender.ts';
-import { getSongRow, myStates, parseList, rowToSong, songStats, type SongRow } from './songs.ts';
+import { normalizeArtistName, splitArtists } from './music.ts';
+import {
+  buildProfile,
+  pickFeed,
+  SIGNAL_WEIGHTS,
+  withSimilarArtists,
+  type Candidate,
+  type SimilarArtistRow,
+  type TasteProfile,
+  type TasteSignal,
+} from './recommender.ts';
+import { getSongRow, getSongRows, myStates, parseList, rowToSong, songStats, type SongRow } from './songs.ts';
 
 const TRENDING_WINDOW = 3 * 24 * 60 * 60 * 1000;
 
@@ -87,7 +97,61 @@ export function loadCandidates(db: DB, userId: string, now: number, max = 4000):
     trending: r.trending_at !== null && now - r.trending_at < TRENDING_WINDOW,
     lastSeenAt: r.last_seen_at,
     collab: 0,
+    friends: 0,
   }));
+}
+
+/** Followed listeners who share their activity, as SQL. Binds :me. */
+const SHARED_FRIEND_ACTIVITY = `
+  SELECT x.user_id, x.song_id, x.created_at, x.kind FROM (
+    SELECT user_id, song_id, created_at, 'saved' AS kind FROM saves
+    UNION ALL SELECT user_id, song_id, created_at, 'liked' FROM reactions WHERE value = 1
+  ) x
+  JOIN follows f ON f.followee_id = x.user_id AND f.follower_id = :me
+  JOIN users u ON u.id = x.user_id
+  WHERE COALESCE(json_extract(u.settings, '$.shareActivity'), 1) = 1`;
+
+/** For each song: how many people this listener follows liked or saved it. */
+export function friendCounts(db: DB, userId: string): Map<string, number> {
+  const rows = all<{ song_id: string; n: number }>(
+    db,
+    `SELECT a.song_id, COUNT(DISTINCT a.user_id) AS n FROM (${SHARED_FRIEND_ACTIVITY}) a GROUP BY a.song_id`,
+    { me: userId },
+  );
+  return new Map(rows.map((r) => [r.song_id, r.n]));
+}
+
+/** Liked artists' display names by key, so reasons can say "Similar to Arctic Monkeys". */
+function artistNames(signals: TasteSignal[]): Map<string, string> {
+  const names = new Map<string, string>();
+  for (const s of signals) {
+    if (s.weight <= 0) continue;
+    for (const name of splitArtists(s.artist)) names.set(normalizeArtistName(name), name);
+  }
+  return names;
+}
+
+/** The listener's most-liked artists, best first. */
+export function topArtists(profile: TasteProfile, signals: TasteSignal[], count: number): { key: string; name: string }[] {
+  const names = artistNames(signals);
+  return [...profile.artists]
+    .filter(([key, value]) => value > 0.15 && names.has(key))
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, count)
+    .map(([key]) => ({ key, name: names.get(key)! }));
+}
+
+/** Adds cached similar-artist data (see server/similar.ts) to a taste profile. */
+export function attachSimilarArtists(db: DB, profile: TasteProfile, signals: TasteSignal[]): TasteProfile {
+  const top = topArtists(profile, signals, 10);
+  if (!top.length) return profile;
+  const rows = all<SimilarArtistRow>(
+    db,
+    `SELECT artist_key AS artistKey, similar_key AS similarKey, score FROM similar_artists
+     WHERE artist_key IN (${top.map(() => '?').join(', ')})`,
+    top.map((a) => a.key),
+  );
+  return withSimilarArtists(profile, rows, artistNames(signals));
 }
 
 /** For each song: how many other listeners who share a liked song with this listener also liked it. */
@@ -149,11 +213,12 @@ export interface BuildFeedOptions {
 export function buildFeed(db: DB, userId: string, opts: BuildFeedOptions): FeedItem[] {
   const { limit, exclude, now, random } = opts;
   const signals = loadSignals(db, userId);
-  const profile = buildProfile(signals);
+  const profile = attachSimilarArtists(db, buildProfile(signals), signals);
   const collab = collaborativeCounts(db, userId);
+  const friends = friendCounts(db, userId);
   const candidates = loadCandidates(db, userId, now)
     .filter((c) => !exclude.has(c.id) && c.id !== opts.startWith)
-    .map((c) => ({ ...c, collab: collab.get(c.id) ?? 0 }));
+    .map((c) => ({ ...c, collab: collab.get(c.id) ?? 0, friends: friends.get(c.id) ?? 0 }));
 
   const picks = pickFeed({ profile, candidates, signals, limit, now, random });
   const rows: { row: SongRow; reason: string }[] = [];
@@ -167,4 +232,50 @@ export function buildFeed(db: DB, userId: string, opts: BuildFeedOptions): FeedI
     if (row) rows.push({ row, reason: pick.reason });
   }
   return toFeedItems(db, userId, rows.slice(0, Math.max(limit, 1)));
+}
+
+/** "Saved by Ania", "Liked by Ania and Tom", "Saved by Ania and 3 others". */
+export function friendsReason(names: string[], saved: boolean): string {
+  const verb = saved ? 'Saved' : 'Liked';
+  if (names.length <= 1) return `${verb} by ${names[0] ?? 'a friend'}`;
+  if (names.length === 2) return `${verb} by ${names[0]} and ${names[1]}`;
+  return `${verb} by ${names[0]} and ${names.length - 1} others`;
+}
+
+/** The Friends feed: songs the people you follow liked or saved, most recent first. */
+export function buildFriendsFeed(db: DB, userId: string, opts: { limit: number; exclude: Set<string> }): FeedItem[] {
+  const rows = all<{ user_id: string; song_id: string; kind: 'saved' | 'liked'; display_name: string }>(
+    db,
+    `SELECT a.user_id, a.song_id, a.kind, u.display_name FROM (${SHARED_FRIEND_ACTIVITY}) a
+     JOIN users u ON u.id = a.user_id
+     JOIN songs s ON s.id = a.song_id
+     WHERE s.unavailable = 0
+       AND NOT EXISTS (SELECT 1 FROM reactions r WHERE r.user_id = :me AND r.song_id = a.song_id AND r.value = -1)
+       AND NOT EXISTS (SELECT 1 FROM playback_failures pf WHERE pf.user_id = :me AND pf.song_id = a.song_id)
+     ORDER BY a.created_at DESC
+     LIMIT 2000`,
+    { me: userId },
+  );
+
+  // Group by song, keeping the order of the most recent activity.
+  const bySong = new Map<string, { names: string[]; saved: boolean }>();
+  for (const row of rows) {
+    if (opts.exclude.has(row.song_id)) continue;
+    let entry = bySong.get(row.song_id);
+    if (!entry) {
+      if (bySong.size >= opts.limit) continue;
+      entry = { names: [], saved: false };
+      bySong.set(row.song_id, entry);
+    }
+    if (!entry.names.includes(row.display_name)) entry.names.push(row.display_name);
+    if (row.kind === 'saved') entry.saved = true;
+  }
+
+  const songs = getSongRows(db, [...bySong.keys()]);
+  const items: { row: SongRow; reason: string }[] = [];
+  for (const [songId, entry] of bySong) {
+    const row = songs.get(songId);
+    if (row) items.push({ row, reason: friendsReason(entry.names, entry.saved) });
+  }
+  return toFeedItems(db, userId, items);
 }

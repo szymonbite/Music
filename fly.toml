@@ -1,0 +1,38 @@
+# Fly.io config for Earworm. See docs/DEPLOY.md for the step-by-step guide.
+# Set these two to your own app name (from `fly apps create`) and region.
+
+app = "earworm-change-me"
+primary_region = "ams"
+
+[build]
+
+[env]
+  PORT = "8080"
+  DATABASE_PATH = "/data/earworm.db"
+  TRUST_PROXY = "1"
+  COOKIE_SECURE = "true"
+
+# SQLite needs a persistent disk. Create it with:
+#   fly volumes create earworm_data --size 1 --region <your region>
+[mounts]
+  source = "earworm_data"
+  destination = "/data"
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  # Sleep when nobody is using it (cheap), wake on the next visit (takes a second or two).
+  auto_stop_machines = "stop"
+  auto_start_machines = true
+  min_machines_running = 0
+
+  [[http_service.checks]]
+    grace_period = "10s"
+    interval = "30s"
+    method = "GET"
+    path = "/api/health"
+    timeout = "5s"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "256mb"

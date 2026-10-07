@@ -1,20 +1,26 @@
 import type {
   Comment,
+  CommentLikeResponse,
   CommentsPage,
   FeedItem,
   FeedRequest,
   FeedResponse,
+  FollowResponse,
   GenreCount,
   LibraryKind,
   LibraryResponse,
   MePatch,
   MeResponse,
+  PeopleResponse,
   ReactionResponse,
   ReactionValue,
+  RepliesResponse,
   ResolveResponse,
   SaveResponse,
   SearchResponse,
+  SeenRequest,
   Song,
+  UserProfile,
   YouTubeLibrary,
 } from '../shared/types.ts';
 
@@ -64,15 +70,25 @@ export const api = {
   react: (id: string, value: ReactionValue) => request<ReactionResponse>('PUT', `/songs/${enc(id)}/reaction`, { value }),
   save: (id: string, saved: boolean) => request<SaveResponse>('PUT', `/songs/${enc(id)}/save`, { saved }),
   /** Fire-and-forget: survives the page being closed. */
-  seen: (id: string, watchedSec: number) =>
-    request<void>('POST', `/songs/${enc(id)}/seen`, { watchedSec: Math.round(watchedSec) }, { keepalive: true }).catch(() => {}),
+  seen: (id: string, report: SeenRequest) =>
+    request<void>('POST', `/songs/${enc(id)}/seen`, { ...report, watchedSec: Math.round(report.watchedSec) }, { keepalive: true }).catch(
+      () => {},
+    ),
   unavailable: (id: string, code: number) =>
     request<void>('POST', `/songs/${enc(id)}/unavailable`, { code }).catch(() => {}),
 
   comments: (id: string, cursor?: number | null) =>
     request<CommentsPage>('GET', `/songs/${enc(id)}/comments${cursor ? `?cursor=${cursor}` : ''}`),
-  postComment: (id: string, body: string) => request<Comment>('POST', `/songs/${enc(id)}/comments`, { body }),
+  postComment: (id: string, body: string, parentId?: number) =>
+    request<Comment>('POST', `/songs/${enc(id)}/comments`, parentId ? { body, parentId } : { body }),
   deleteComment: (commentId: number) => request<void>('DELETE', `/comments/${commentId}`),
+  replies: (commentId: number) => request<RepliesResponse>('GET', `/comments/${commentId}/replies`),
+  likeComment: (commentId: number, liked: boolean) =>
+    request<CommentLikeResponse>('PUT', `/comments/${commentId}/like`, { liked }),
+
+  people: (q = '') => request<PeopleResponse>('GET', `/users${q ? `?q=${enc(q)}` : ''}`),
+  user: (id: string) => request<UserProfile>('GET', `/users/${enc(id)}`),
+  follow: (id: string, following: boolean) => request<FollowResponse>('PUT', `/users/${enc(id)}/follow`, { following }),
 
   genres: () => request<{ genres: GenreCount[] }>('GET', '/genres'),
   starter: (genre?: string | null) =>

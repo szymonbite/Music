@@ -1,5 +1,14 @@
 import { Router } from 'express';
-import type { Comment, CommentsPage, ReactionResponse, ReactionValue, SaveResponse, SyncStatus } from '../../shared/types.ts';
+import type {
+  Comment,
+  CommentLikeResponse,
+  CommentsPage,
+  ReactionResponse,
+  ReactionValue,
+  RepliesResponse,
+  SaveResponse,
+  SyncStatus,
+} from '../../shared/types.ts';
 import type { AppContext } from '../context.ts';
 import { all, get, run } from '../db.ts';
 import { HttpError, RateLimiter, badRequest, notFound } from '../http.ts';
@@ -24,18 +33,23 @@ export function cleanComment(value: unknown): string | null {
 interface CommentRow {
   id: number;
   song_id: string;
+  parent_id: number | null;
   body: string;
   created_at: number;
   user_id: string;
   display_name: string;
   google_picture: string | null;
   google_sub: string | null;
+  likes: number;
+  liked: number;
+  replies: number;
 }
 
 function toComment(row: CommentRow, viewerId: string): Comment {
   return {
     id: row.id,
     songId: row.song_id,
+    parentId: row.parent_id,
     body: row.body,
     createdAt: row.created_at,
     author: {
@@ -44,11 +58,25 @@ function toComment(row: CommentRow, viewerId: string): Comment {
       avatarUrl: row.google_sub ? row.google_picture : null,
     },
     mine: row.user_id === viewerId,
+    likes: row.likes,
+    liked: row.liked === 1,
+    replyCount: row.replies,
   };
 }
 
-const COMMENT_SELECT = `SELECT c.id, c.song_id, c.body, c.created_at, c.user_id, u.display_name, u.google_picture, u.google_sub
+/** Every query using this must bind :me (the viewer). */
+const COMMENT_SELECT = `SELECT c.id, c.song_id, c.parent_id, c.body, c.created_at, c.user_id,
+    u.display_name, u.google_picture, u.google_sub,
+    (SELECT COUNT(*) FROM comment_likes cl WHERE cl.comment_id = c.id) AS likes,
+    EXISTS (SELECT 1 FROM comment_likes cl WHERE cl.comment_id = c.id AND cl.user_id = :me) AS liked,
+    (SELECT COUNT(*) FROM comments r WHERE r.parent_id = c.id) AS replies
   FROM comments c JOIN users u ON u.id = c.user_id`;
+
+function commentIdParam(value: string | undefined): number {
+  const id = Number(value);
+  if (!Number.isSafeInteger(id) || id <= 0) throw badRequest('Invalid comment id');
+  return id;
+}
 
 export function socialRoutes(ctx: AppContext): Router {
   const router = Router();
@@ -108,10 +136,14 @@ export function socialRoutes(ctx: AppContext): Router {
     const user = requireUser(req);
     const song = songFromParams(ctx.db, req);
     const cursor = intInRange(req.query.cursor, 0, Number.MAX_SAFE_INTEGER, 0);
+    // Top-level comments, newest first. Replies load per comment.
     const rows = all<CommentRow>(
       ctx.db,
-      `${COMMENT_SELECT} WHERE c.song_id = :song ${cursor ? 'AND c.id < :cursor' : ''} ORDER BY c.id DESC LIMIT :limit`,
-      cursor ? { song: song.id, cursor, limit: COMMENTS_PER_PAGE + 1 } : { song: song.id, limit: COMMENTS_PER_PAGE + 1 },
+      `${COMMENT_SELECT} WHERE c.song_id = :song AND c.parent_id IS NULL ${cursor ? 'AND c.id < :cursor' : ''}
+       ORDER BY c.id DESC LIMIT :limit`,
+      cursor
+        ? { me: user.id, song: song.id, cursor, limit: COMMENTS_PER_PAGE + 1 }
+        : { me: user.id, song: song.id, limit: COMMENTS_PER_PAGE + 1 },
     );
     const page = rows.slice(0, COMMENTS_PER_PAGE);
     const total = get<{ n: number }>(ctx.db, 'SELECT COUNT(*) AS n FROM comments WHERE song_id = ?', [song.id])!.n;
@@ -125,23 +157,61 @@ export function socialRoutes(ctx: AppContext): Router {
   router.post('/songs/:id/comments', (req, res) => {
     const user = requireUser(req);
     const song = songFromParams(ctx.db, req);
-    const text = cleanComment(body(req).body);
+    const input = body(req);
+    const text = cleanComment(input.body);
     if (!text) throw badRequest(`Comments need to be between 1 and ${COMMENT_MAX} characters`, 'bad_comment');
+
+    // Replies hang off a top-level comment (replying to a reply joins the same thread), like TikTok.
+    let parentId: number | null = null;
+    if (input.parentId !== undefined && input.parentId !== null) {
+      const parent = get<{ id: number; song_id: string; parent_id: number | null }>(
+        ctx.db,
+        'SELECT id, song_id, parent_id FROM comments WHERE id = ?',
+        [commentIdParam(String(input.parentId))],
+      );
+      if (!parent || parent.song_id !== song.id) throw notFound('The comment you replied to is gone');
+      parentId = parent.parent_id ?? parent.id;
+    }
+
     commentLimiter.consume(user.id);
-    const { lastInsertRowid } = run(ctx.db, 'INSERT INTO comments (song_id, user_id, body, created_at) VALUES (?, ?, ?, ?)', [
-      song.id,
-      user.id,
-      text,
-      ctx.now(),
-    ]);
-    const row = get<CommentRow>(ctx.db, `${COMMENT_SELECT} WHERE c.id = ?`, [lastInsertRowid])!;
+    const { lastInsertRowid } = run(
+      ctx.db,
+      'INSERT INTO comments (song_id, user_id, body, created_at, parent_id) VALUES (?, ?, ?, ?, ?)',
+      [song.id, user.id, text, ctx.now(), parentId],
+    );
+    const row = get<CommentRow>(ctx.db, `${COMMENT_SELECT} WHERE c.id = :id`, { me: user.id, id: lastInsertRowid })!;
     res.status(201).json(toComment(row, user.id));
+  });
+
+  router.get('/comments/:commentId/replies', (req, res) => {
+    const user = requireUser(req);
+    const parentId = commentIdParam(req.params.commentId);
+    const rows = all<CommentRow>(
+      ctx.db,
+      `${COMMENT_SELECT} WHERE c.parent_id = :parent ORDER BY c.id ASC LIMIT 200`,
+      { me: user.id, parent: parentId },
+    );
+    res.json({ replies: rows.map((r) => toComment(r, user.id)) } satisfies RepliesResponse);
+  });
+
+  router.put('/comments/:commentId/like', (req, res) => {
+    const user = requireUser(req);
+    const id = commentIdParam(req.params.commentId);
+    const liked = body(req).liked;
+    if (typeof liked !== 'boolean') throw badRequest('liked must be true or false');
+    if (!get(ctx.db, 'SELECT 1 FROM comments WHERE id = ?', [id])) throw notFound('Comment not found');
+    if (liked) {
+      run(ctx.db, 'INSERT OR IGNORE INTO comment_likes (user_id, comment_id, created_at) VALUES (?, ?, ?)', [user.id, id, ctx.now()]);
+    } else {
+      run(ctx.db, 'DELETE FROM comment_likes WHERE user_id = ? AND comment_id = ?', [user.id, id]);
+    }
+    const likes = get<{ n: number }>(ctx.db, 'SELECT COUNT(*) AS n FROM comment_likes WHERE comment_id = ?', [id])!.n;
+    res.json({ liked, likes } satisfies CommentLikeResponse);
   });
 
   router.delete('/comments/:commentId', (req, res) => {
     const user = requireUser(req);
-    const id = Number(req.params.commentId);
-    if (!Number.isSafeInteger(id) || id <= 0) throw badRequest('Invalid comment id');
+    const id = commentIdParam(req.params.commentId);
     const comment = get<{ user_id: string }>(ctx.db, 'SELECT user_id FROM comments WHERE id = ?', [id]);
     if (!comment) throw notFound('Comment not found');
     if (comment.user_id !== user.id) throw new HttpError(403, 'forbidden', 'You can only delete your own comments');

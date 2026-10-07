@@ -6,6 +6,7 @@ import { createApp } from './app.ts';
 import { loadCatalog, seedCatalog } from './catalog.ts';
 import { loadConfig } from './config.ts';
 import { openDb } from './db.ts';
+import { DeezerProvider, LastFmProvider, SimilarArtists } from './similar.ts';
 import { YouTubeClient } from './youtube/client.ts';
 import { YouTubeService } from './youtube/service.ts';
 
@@ -29,6 +30,7 @@ async function main(): Promise<void> {
     db,
     now,
     discoverySearch: config.youtube.discoverySearch,
+    dailySearchBudget: config.youtube.dailySearchBudget,
     client: new YouTubeClient({
       apiKey: config.youtube.apiKey,
       clientId: config.youtube.clientId,
@@ -36,7 +38,19 @@ async function main(): Promise<void> {
     }),
   });
 
-  const app = createApp({ db, config, youtube, now, random: Math.random });
+  const { provider: similarProvider, lastfmApiKey } = config.similarArtists;
+  const similar = new SimilarArtists({
+    db,
+    now,
+    provider:
+      similarProvider === 'lastfm' && lastfmApiKey
+        ? new LastFmProvider(lastfmApiKey)
+        : similarProvider === 'deezer'
+          ? new DeezerProvider()
+          : null,
+  });
+
+  const app = createApp({ db, config, youtube, similar, now, random: Math.random });
   const server = http.createServer(app);
   let closeVite: () => Promise<void> = async () => {};
 
@@ -62,7 +76,8 @@ async function main(): Promise<void> {
     const url = config.appUrl ?? `http://localhost:${config.port}`;
     console.log(`\n  🎧 Earworm is running at ${url} (${config.isProduction ? 'production' : 'development'})`);
     console.log(`     YouTube Music login: ${youtube.loginEnabled ? 'on' : 'off (set GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET)'}`);
-    console.log(`     YouTube search:      ${youtube.searchEnabled ? 'on' : 'off (set YOUTUBE_API_KEY)'}\n`);
+    console.log(`     YouTube search:      ${youtube.searchEnabled ? 'on' : 'off (set YOUTUBE_API_KEY)'}`);
+    console.log(`     Similar artists:     ${similar.providerName ?? 'off'}\n`);
   });
 
   if (youtube.searchEnabled) {

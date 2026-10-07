@@ -18,6 +18,7 @@ export interface UserRow {
   yt_token_expires_at: number | null;
   yt_playlist_id: string | null;
   yt_discovered_at: number | null;
+  yt_expired_at: number | null;
 }
 
 export const DEFAULT_SETTINGS: UserSettings = {
@@ -26,9 +27,11 @@ export const DEFAULT_SETTINGS: UserSettings = {
   syncReactions: true,
   syncSaves: true,
   region: 'US',
+  previewMode: true,
+  shareActivity: true,
 };
 
-const BOOLEAN_SETTINGS = ['skipIntro', 'autoAdvance', 'syncReactions', 'syncSaves'] as const;
+const BOOLEAN_SETTINGS = ['skipIntro', 'autoAdvance', 'syncReactions', 'syncSaves', 'previewMode', 'shareActivity'] as const;
 
 /** Validates a (partial) settings object, dropping anything unknown or malformed. */
 export function sanitizeSettings(input: unknown): Partial<UserSettings> {
@@ -102,7 +105,9 @@ export function toMe(db: DB, user: UserRow): Me {
        (SELECT COUNT(*) FROM favorites WHERE user_id = :id) AS favorites,
        (SELECT COUNT(*) FROM reactions WHERE user_id = :id AND value = 1) AS likes,
        (SELECT COUNT(*) FROM saves WHERE user_id = :id) AS saves,
-       (SELECT COUNT(*) FROM comments WHERE user_id = :id) AS comments`,
+       (SELECT COUNT(*) FROM comments WHERE user_id = :id) AS comments,
+       (SELECT COUNT(*) FROM follows WHERE followee_id = :id) AS followers,
+       (SELECT COUNT(*) FROM follows WHERE follower_id = :id) AS following`,
     { id: user.id },
   )!;
   const connected = isYouTubeConnected(user);
@@ -120,6 +125,7 @@ export function toMe(db: DB, user: UserRow): Me {
           playlistUrl: user.yt_playlist_id ? youtubePlaylistUrl(user.yt_playlist_id) : null,
         }
       : null,
+    youtubeExpired: !connected && user.yt_expired_at !== null,
     counts: { ...counts },
   };
 }
@@ -183,6 +189,14 @@ export function mergeUsers(db: DB, fromId: string, intoId: string): void {
              SELECT :into, song_id, created_at FROM library WHERE user_id = :from`, params);
     run(db, `INSERT OR IGNORE INTO playback_failures (user_id, song_id, code, created_at)
              SELECT :into, song_id, code, created_at FROM playback_failures WHERE user_id = :from`, params);
+    run(db, `INSERT OR IGNORE INTO comment_likes (user_id, comment_id, created_at)
+             SELECT :into, comment_id, created_at FROM comment_likes WHERE user_id = :from`, params);
+    run(db, `INSERT OR IGNORE INTO hook_votes (user_id, song_id, position_sec, created_at)
+             SELECT :into, song_id, position_sec, created_at FROM hook_votes WHERE user_id = :from`, params);
+    run(db, `INSERT OR IGNORE INTO follows (follower_id, followee_id, created_at)
+             SELECT :into, followee_id, created_at FROM follows WHERE follower_id = :from AND followee_id != :into`, params);
+    run(db, `INSERT OR IGNORE INTO follows (follower_id, followee_id, created_at)
+             SELECT follower_id, :into, created_at FROM follows WHERE followee_id = :from AND follower_id != :into`, params);
     run(db, 'UPDATE comments SET user_id = :into WHERE user_id = :from', params);
     run(db, 'UPDATE sessions SET user_id = :into WHERE user_id = :from', params);
     run(db, `UPDATE users SET onboarded_at = COALESCE(onboarded_at, (SELECT onboarded_at FROM users WHERE id = :from))

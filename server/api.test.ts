@@ -17,7 +17,12 @@ describe('sessions', () => {
     const agent = request.agent(app);
     const first = await agent.get('/api/me').expect(200);
     expect(String(first.headers['set-cookie'])).toMatch(/ew_session=.+HttpOnly/);
-    expect(first.body.me).toMatchObject({ onboarded: false, youtube: null, counts: { favorites: 0, likes: 0, saves: 0, comments: 0 } });
+    expect(first.body.me).toMatchObject({
+      onboarded: false,
+      youtube: null,
+      youtubeExpired: false,
+      counts: { favorites: 0, likes: 0, saves: 0, comments: 0, followers: 0, following: 0 },
+    });
     expect(first.body.me.displayName).toMatch(/^Listener \d{4}$/);
     expect(first.body.features).toEqual({ youtubeLogin: false, youtubeSearch: false });
 
@@ -56,7 +61,15 @@ describe('profile', () => {
       .expect(200);
     expect(res.body.me.displayName).toBe('Szymon');
     expect(res.body.me.onboarded).toBe(true);
-    expect(res.body.me.settings).toEqual({ skipIntro: false, autoAdvance: true, syncReactions: true, syncSaves: true, region: 'GB' });
+    expect(res.body.me.settings).toEqual({
+      skipIntro: false,
+      autoAdvance: true,
+      syncReactions: true,
+      syncSaves: true,
+      region: 'GB',
+      previewMode: true,
+      shareActivity: true,
+    });
   });
 
   it('rejects empty or overly long names', async () => {

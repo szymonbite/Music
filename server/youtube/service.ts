@@ -1,8 +1,9 @@
 import type { ReactionValue, SyncStatus, YouTubePlaylist } from '../../shared/types.ts';
 import { formatGenre, isVideoId } from '../../shared/youtube.ts';
-import { all, get, run, transaction, type DB } from '../db.ts';
+import { all, isDue, markFetched, run, takeFromDailyBudget, transaction, type DB } from '../db.ts';
 import { HttpError } from '../http.ts';
 import {
+  artistKeys,
   decadeTag,
   parseIsoDuration,
   parseVideoTitle,
@@ -100,6 +101,8 @@ export interface YouTubeServiceDeps {
   now: () => number;
   /** Spend search quota on genre-based discovery. */
   discoverySearch: boolean;
+  /** Max discovery searches per day. */
+  dailySearchBudget: number;
 }
 
 export class YouTubeService {
@@ -107,12 +110,14 @@ export class YouTubeService {
   readonly client: YouTubeClient;
   private readonly now: () => number;
   private readonly discoverySearch: boolean;
+  private readonly dailySearchBudget: number;
 
   constructor(deps: YouTubeServiceDeps) {
     this.db = deps.db;
     this.client = deps.client;
     this.now = deps.now;
     this.discoverySearch = deps.discoverySearch;
+    this.dailySearchBudget = deps.dailySearchBudget;
   }
 
   get loginEnabled(): boolean {
@@ -144,7 +149,7 @@ export class YouTubeService {
       this.db,
       `UPDATE users SET google_sub = :sub, google_email = :email, google_name = :name, google_picture = :picture,
          yt_access_token = :access, yt_refresh_token = COALESCE(:refresh, yt_refresh_token), yt_token_expires_at = :expires,
-         yt_discovered_at = NULL
+         yt_discovered_at = NULL, yt_expired_at = NULL
        WHERE id = :id`,
       {
         id: user.id,
@@ -159,11 +164,12 @@ export class YouTubeService {
     );
   }
 
-  private clearTokens(user: UserRow): void {
+  /** Unlinks the Google account (the listener asked to disconnect). */
+  private unlink(user: UserRow): void {
     run(
       this.db,
       `UPDATE users SET google_sub = NULL, google_email = NULL, google_name = NULL, google_picture = NULL,
-         yt_access_token = NULL, yt_refresh_token = NULL, yt_token_expires_at = NULL
+         yt_access_token = NULL, yt_refresh_token = NULL, yt_token_expires_at = NULL, yt_expired_at = NULL
        WHERE id = ?`,
       [user.id],
     );
@@ -171,6 +177,25 @@ export class YouTubeService {
     user.yt_access_token = null;
     user.yt_refresh_token = null;
     user.yt_token_expires_at = null;
+    user.yt_expired_at = null;
+  }
+
+  /**
+   * Google stopped accepting our tokens (revoked, or expired: apps in Google's
+   * "Testing" mode get refresh tokens that last 7 days). Keep the account link
+   * so reconnecting lands on the same profile, and flag it so the app can ask.
+   */
+  private markExpired(user: UserRow): void {
+    const now = this.now();
+    run(
+      this.db,
+      'UPDATE users SET yt_access_token = NULL, yt_refresh_token = NULL, yt_token_expires_at = NULL, yt_expired_at = ? WHERE id = ?',
+      [now, user.id],
+    );
+    user.yt_access_token = null;
+    user.yt_refresh_token = null;
+    user.yt_token_expires_at = null;
+    user.yt_expired_at = now;
   }
 
   async disconnect(user: UserRow): Promise<void> {
@@ -182,7 +207,7 @@ export class YouTubeService {
         console.warn('Revoking Google token failed:', describe(err));
       }
     }
-    this.clearTokens(user);
+    this.unlink(user);
   }
 
   /** A valid access token for a connected user, refreshed when it is about to expire. */
@@ -193,7 +218,7 @@ export class YouTubeService {
     const now = this.now();
     if (user.yt_access_token && (user.yt_token_expires_at ?? 0) - 60_000 > now) return user.yt_access_token;
     if (!user.yt_refresh_token) {
-      this.clearTokens(user);
+      this.markExpired(user);
       throw new HttpError(409, 'youtube_reconnect', 'Your YouTube Music connection expired. Please connect again.');
     }
     try {
@@ -210,7 +235,7 @@ export class YouTubeService {
       return tokens.access_token;
     } catch (err) {
       if (err instanceof YouTubeApiError && (err.reason === 'invalid_grant' || err.status === 400 || err.status === 401)) {
-        this.clearTokens(user);
+        this.markExpired(user);
         throw new HttpError(409, 'youtube_reconnect', 'Your YouTube Music connection expired. Please connect again.');
       }
       throw err;
@@ -437,16 +462,16 @@ export class YouTubeService {
   // --- Discovery ---------------------------------------------------------------
 
   private isDue(key: string, maxAgeMs: number): boolean {
-    const row = get<{ fetched_at: number }>(this.db, 'SELECT fetched_at FROM fetch_log WHERE key = ?', [key]);
-    return !row || this.now() - row.fetched_at >= maxAgeMs;
+    return isDue(this.db, key, maxAgeMs, this.now());
   }
 
   private markFetched(key: string): void {
-    run(
-      this.db,
-      'INSERT INTO fetch_log (key, fetched_at) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET fetched_at = excluded.fetched_at',
-      [key, this.now()],
-    );
+    markFetched(this.db, key, this.now());
+  }
+
+  /** Spends one of today's discovery searches (each costs 100 quota units). */
+  private takeSearch(): boolean {
+    return takeFromDailyBudget(this.db, 'youtube-search', this.dailySearchBudget, this.now());
   }
 
   private hydrating: Promise<void> | null = null;
@@ -495,11 +520,17 @@ export class YouTubeService {
 
   /**
    * Pulls fresh candidate songs from YouTube for a listener: the regional
-   * music chart, recent uploads from their favourite artists' channels, and
-   * (optionally) a search in their top genre. Throttled per listener and per
-   * source so quota lasts. Returns the number of songs added or refreshed.
+   * music chart, recent uploads from their favourite artists' channels, songs
+   * by similar artists they haven't heard yet, and (optionally) a search in
+   * their top genre. Throttled per listener and per source, and searches come
+   * out of a daily budget, so the quota lasts. Returns the number of songs
+   * added or refreshed.
    */
-  async discover(user: UserRow, signals: TasteSignal[], opts: { force?: boolean } = {}): Promise<number> {
+  async discover(
+    user: UserRow,
+    signals: TasteSignal[],
+    opts: { force?: boolean; similarArtists?: { key: string; name: string }[] } = {},
+  ): Promise<number> {
     if (!this.canCall(user)) return 0;
     const now = this.now();
     if (!opts.force && user.yt_discovered_at && now - user.yt_discovered_at < 6 * HOUR) return 0;
@@ -534,6 +565,24 @@ export class YouTubeService {
       });
     }
 
+    // Songs by similar artists we don't have any songs for yet (two new artists per run).
+    for (const artist of (opts.similarArtists ?? []).slice(0, 2)) {
+      const key = `artist-search:${artist.key}`;
+      if (!this.isDue(key, 14 * 24 * HOUR)) continue;
+      steps.push(async () => {
+        if (!this.takeSearch()) return;
+        this.markFetched(key);
+        const ids = (await call((creds) => this.client.search(artist.name, creds, 10))) ?? [];
+        const videos = ids.length ? ((await call((creds) => this.client.videos(ids, creds))) ?? []) : [];
+        // Searches return other artists too; keep only this artist's songs.
+        const theirs = videos.filter((v) => {
+          const input = videoToSongInput(v);
+          return input !== null && artistKeys(input.artist).includes(artist.key);
+        });
+        added += this.saveVideos(theirs, { strict: true }).length;
+      });
+    }
+
     if (this.discoverySearch) {
       const genre = topGenre(signals);
       if (genre) {
@@ -541,6 +590,7 @@ export class YouTubeService {
         const key = `search:${query.toLowerCase()}`;
         if (this.isDue(key, 24 * HOUR)) {
           steps.push(async () => {
+            if (!this.takeSearch()) return;
             const ids = (await call((creds) => this.client.search(query, creds, 25))) ?? [];
             const videos = ids.length ? ((await call((creds) => this.client.videos(ids, creds))) ?? []) : [];
             added += this.saveVideos(videos, { strict: true }).length;

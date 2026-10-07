@@ -96,7 +96,8 @@ export function songRoutes(ctx: AppContext): Router {
   router.post('/songs/:id/seen', (req, res) => {
     const user = requireUser(req);
     const row = songFromParams(ctx.db, req);
-    const watched = intInRange(body(req).watchedSec, 0, 3600, 0);
+    const input = body(req);
+    const watched = intInRange(input.watchedSec, 0, 3600, 0);
     run(
       ctx.db,
       `INSERT INTO views (user_id, song_id, seen_count, watched_sec, last_seen_at) VALUES (?, ?, 1, ?, ?)
@@ -104,6 +105,26 @@ export function songRoutes(ctx: AppContext): Router {
          watched_sec = MAX(watched_sec, excluded.watched_sec), last_seen_at = excluded.last_seen_at`,
       [user.id, row.id, watched, ctx.now()],
     );
+
+    // The listener jumped to this point and kept listening: a vote for where the hook is.
+    const hook = typeof input.hookSec === 'number' ? Math.round(input.hookSec) : NaN;
+    const maxHook = Math.min(row.duration_sec ?? 1200, 1200) - 10;
+    if (Number.isFinite(hook) && hook >= 5 && hook <= maxHook) {
+      run(
+        ctx.db,
+        `INSERT INTO hook_votes (user_id, song_id, position_sec, created_at) VALUES (?, ?, ?, ?)
+         ON CONFLICT(user_id, song_id) DO UPDATE SET position_sec = excluded.position_sec, created_at = excluded.created_at`,
+        [user.id, row.id, hook, ctx.now()],
+      );
+      const votes = all<{ position_sec: number }>(ctx.db, 'SELECT position_sec FROM hook_votes WHERE song_id = ? ORDER BY position_sec', [
+        row.id,
+      ]).map((v) => v.position_sec);
+      if (votes.length >= 2) {
+        const mid = Math.floor(votes.length / 2);
+        const median = votes.length % 2 ? votes[mid]! : Math.round((votes[mid - 1]! + votes[mid]!) / 2);
+        run(ctx.db, 'UPDATE songs SET hook_sec = ? WHERE id = ?', [median, row.id]);
+      }
+    }
     res.status(204).end();
   });
 

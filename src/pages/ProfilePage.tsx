@@ -112,8 +112,12 @@ export function ProfilePage() {
         </form>
         <dl className="stats">
           <div>
-            <dt>Favourites</dt>
-            <dd>{me.counts.favorites}</dd>
+            <dt>Followers</dt>
+            <dd>{me.counts.followers}</dd>
+          </div>
+          <div>
+            <dt>Following</dt>
+            <dd>{me.counts.following}</dd>
           </div>
           <div>
             <dt>Likes</dt>
@@ -124,13 +128,22 @@ export function ProfilePage() {
             <dd>{me.counts.saves}</dd>
           </div>
           <div>
+            <dt>Favourites</dt>
+            <dd>{me.counts.favorites}</dd>
+          </div>
+          <div>
             <dt>Comments</dt>
             <dd>{me.counts.comments}</dd>
           </div>
         </dl>
-        <Link to="/pick" className="btn btn--small">
-          <Icon name="heart" size={16} /> Edit favourite songs
-        </Link>
+        <div className="profile__actions">
+          <Link to="/people" className="btn btn--small btn--primary">
+            <Icon name="user" size={16} /> Find people
+          </Link>
+          <Link to="/pick" className="btn btn--small">
+            <Icon name="heart" size={16} /> Edit favourite songs
+          </Link>
+        </div>
       </section>
 
       <section className="card-section" aria-labelledby="yt-heading">
@@ -167,9 +180,15 @@ export function ProfilePage() {
           </>
         ) : features.youtubeLogin ? (
           <>
-            <p className="muted">Import your liked songs and playlists, and keep likes and saves in sync with YouTube Music.</p>
+            {me.youtubeExpired ? (
+              <p className="notice notice--error">
+                Your YouTube Music connection expired, so likes and saves aren’t syncing. Reconnect to pick up where you left off.
+              </p>
+            ) : (
+              <p className="muted">Import your liked songs and playlists, and keep likes and saves in sync with YouTube Music.</p>
+            )}
             <a className="btn btn--youtube" href={connectYouTubeUrl('/me')}>
-              <Icon name="music" size={20} /> Connect YouTube Music
+              <Icon name="music" size={20} /> {me.youtubeExpired ? 'Reconnect YouTube Music' : 'Connect YouTube Music'}
             </a>
           </>
         ) : (
@@ -181,6 +200,12 @@ export function ProfilePage() {
 
       <section className="card-section" aria-labelledby="playback-heading">
         <h2 id="playback-heading">Playback</h2>
+        <Switch
+          label="Hook previews"
+          description="Play a 30 second highlight of each song. Tap “Full song” to keep listening."
+          checked={me.settings.previewMode}
+          onChange={(v) => void setSetting({ previewMode: v })}
+        />
         <Switch
           label="Skip intros"
           description="Start songs about a quarter of the way in, closer to the hook."
@@ -205,6 +230,16 @@ export function ProfilePage() {
             </select>
           </label>
         )}
+      </section>
+
+      <section className="card-section" aria-labelledby="privacy-heading">
+        <h2 id="privacy-heading">Privacy</h2>
+        <Switch
+          label="Show my likes & saves to followers"
+          description="They appear on your profile and in your followers’ Friends feed."
+          checked={me.settings.shareActivity}
+          onChange={(v) => void setSetting({ shareActivity: v })}
+        />
       </section>
 
       <section className="card-section shortcuts-section" aria-labelledby="keys-heading">

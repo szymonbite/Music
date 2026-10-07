@@ -16,6 +16,8 @@ export interface Song {
   tags: string[];
   thumbnailUrl: string;
   source: SongSource;
+  /** Where the hook is, learned from where listeners jump to. Null until enough people have voted. */
+  hookSec: number | null;
 }
 
 export interface SongStats {
@@ -37,7 +39,11 @@ export interface FeedItem extends Song {
   reason: string;
 }
 
+/** "forYou" is the personalised feed; "friends" shows what people you follow liked and saved. */
+export type FeedMode = 'forYou' | 'friends';
+
 export interface FeedRequest {
+  mode?: FeedMode;
   limit?: number;
   /** Song ids the client already has, so the server doesn't send them again. */
   exclude?: string[];
@@ -60,6 +66,10 @@ export interface UserSettings {
   syncSaves: boolean;
   /** ISO 3166-1 alpha-2 region used for trending charts. */
   region: string;
+  /** Play a ~30 second highlight of each song instead of the whole thing. */
+  previewMode: boolean;
+  /** Let people who follow you see your recent likes and saves. */
+  shareActivity: boolean;
 }
 
 export interface YouTubeConnection {
@@ -77,11 +87,15 @@ export interface Me {
   onboarded: boolean;
   settings: UserSettings;
   youtube: YouTubeConnection | null;
+  /** The YouTube Music connection stopped working (e.g. Google expired it) and needs reconnecting. */
+  youtubeExpired: boolean;
   counts: {
     favorites: number;
     likes: number;
     saves: number;
     comments: number;
+    followers: number;
+    following: number;
   };
 }
 
@@ -112,10 +126,56 @@ export interface CommentAuthor {
 export interface Comment {
   id: number;
   songId: string;
+  /** The top-level comment this replies to, or null for top-level comments. */
+  parentId: number | null;
   body: string;
   createdAt: number;
   author: CommentAuthor;
   mine: boolean;
+  likes: number;
+  liked: boolean;
+  replyCount: number;
+}
+
+export interface CommentLikeResponse {
+  liked: boolean;
+  likes: number;
+}
+
+export interface RepliesResponse {
+  replies: Comment[];
+}
+
+export interface SeenRequest {
+  /** Seconds the song actually played. */
+  watchedSec: number;
+  /** Where the listener jumped to and then kept listening: a vote for the song's hook. */
+  hookSec?: number;
+}
+
+export interface PublicUser {
+  id: string;
+  displayName: string;
+  avatarUrl: string | null;
+  followers: number;
+  following: number;
+  isFollowing: boolean;
+  isMe: boolean;
+}
+
+export interface UserProfile {
+  user: PublicUser;
+  /** Recent likes and saves, or null when the listener keeps them private. */
+  activity: { saved: Song[]; liked: Song[] } | null;
+}
+
+export interface PeopleResponse {
+  people: PublicUser[];
+}
+
+export interface FollowResponse {
+  following: boolean;
+  followers: number;
 }
 
 export interface CommentsPage {

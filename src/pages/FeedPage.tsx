@@ -6,6 +6,7 @@ export function FeedPage() {
   const { search } = useRouter();
   const song = search.get('song');
   const startWith = isVideoId(song) ? song : null;
-  // A new shared song starts a fresh feed.
-  return <Feed key={startWith ?? 'feed'} startWith={startWith} />;
+  const mode = search.get('tab') === 'friends' && !startWith ? 'friends' : 'forYou';
+  // A new shared song or a different tab starts a fresh feed.
+  return <Feed key={`${mode}:${startWith ?? ''}`} startWith={startWith} mode={mode} />;
 }

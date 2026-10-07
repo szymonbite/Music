@@ -6,6 +6,7 @@ import { authRoutes } from './routes/auth.ts';
 import { feedRoutes } from './routes/feed.ts';
 import { libraryRoutes } from './routes/library.ts';
 import { meRoutes } from './routes/me.ts';
+import { peopleRoutes } from './routes/people.ts';
 import { socialRoutes } from './routes/social.ts';
 import { songRoutes } from './routes/songs.ts';
 import { youtubeRoutes } from './routes/youtube.ts';
@@ -25,7 +26,7 @@ export function apiRouter(ctx: AppContext): Router {
   api.get('/health', (_req, res) => {
     res.json({ ok: true });
   });
-  api.use(meRoutes(ctx), authRoutes(ctx), feedRoutes(ctx), songRoutes(ctx), socialRoutes(ctx), libraryRoutes(ctx), youtubeRoutes(ctx));
+  api.use(meRoutes(ctx), authRoutes(ctx), feedRoutes(ctx), songRoutes(ctx), socialRoutes(ctx), libraryRoutes(ctx), youtubeRoutes(ctx), peopleRoutes(ctx));
 
   api.use((_req, _res, next) => next(notFound('No such API endpoint')));
   api.use(errorHandler);

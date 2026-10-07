@@ -7,7 +7,7 @@ import { SessionProvider } from '../session.tsx';
 import { CommentsSheet } from './CommentsSheet.tsx';
 
 vi.mock('../api.ts', () => ({
-  api: { me: vi.fn(), comments: vi.fn(), postComment: vi.fn(), deleteComment: vi.fn() },
+  api: { me: vi.fn(), comments: vi.fn(), postComment: vi.fn(), deleteComment: vi.fn(), replies: vi.fn(), likeComment: vi.fn() },
 }));
 
 const mocked = vi.mocked(api);
@@ -22,6 +22,7 @@ const song: Song = {
   tags: [],
   thumbnailUrl: '',
   source: 'catalog',
+  hookSec: null,
 };
 
 const session: MeResponse = {
@@ -30,17 +31,31 @@ const session: MeResponse = {
     displayName: 'Szymon',
     avatarUrl: null,
     onboarded: true,
-    settings: { skipIntro: true, autoAdvance: true, syncReactions: true, syncSaves: true, region: 'PL' },
+    settings: {
+      skipIntro: true,
+      autoAdvance: true,
+      syncReactions: true,
+      syncSaves: true,
+      region: 'PL',
+      previewMode: true,
+      shareActivity: true,
+    },
     youtube: null,
-    counts: { favorites: 3, likes: 0, saves: 0, comments: 0 },
+    youtubeExpired: false,
+    counts: { favorites: 3, likes: 0, saves: 0, comments: 0, followers: 0, following: 0 },
   },
   features: { youtubeLogin: false, youtubeSearch: false },
 };
 
-function comment(id: number, body: string, mine: boolean): Comment {
+function comment(id: number, body: string, mine: boolean, extra: Partial<Comment> = {}): Comment {
   return {
     id,
     songId: song.id,
+    parentId: null,
+    likes: 0,
+    liked: false,
+    replyCount: 0,
+    ...extra,
     body,
     createdAt: Date.now() - 60_000,
     author: mine ? { id: 'me', displayName: 'Szymon', avatarUrl: null } : { id: 'ania', displayName: 'Ania', avatarUrl: null },
@@ -51,12 +66,13 @@ function comment(id: number, body: string, mine: boolean): Comment {
 function renderSheet() {
   const onClose = vi.fn();
   const onCountChange = vi.fn();
+  const onOpenUser = vi.fn();
   render(
     <SessionProvider>
-      <CommentsSheet song={song} onClose={onClose} onCountChange={onCountChange} />
+      <CommentsSheet song={song} onClose={onClose} onCountChange={onCountChange} onOpenUser={onOpenUser} />
     </SessionProvider>,
   );
-  return { onClose, onCountChange, user: userEvent.setup() };
+  return { onClose, onCountChange, onOpenUser, user: userEvent.setup() };
 }
 
 beforeEach(() => {
@@ -77,7 +93,7 @@ describe('CommentsSheet', () => {
     expect(screen.getByRole('textbox', { name: 'Add a comment' })).toHaveValue('Never gonna skip this 🔥');
     await user.click(screen.getByRole('button', { name: 'Post comment' }));
 
-    expect(mocked.postComment).toHaveBeenCalledWith(song.id, 'Never gonna skip this 🔥');
+    expect(mocked.postComment).toHaveBeenCalledWith(song.id, 'Never gonna skip this 🔥', undefined);
     expect(await screen.findByText('Never gonna skip this 🔥')).toBeInTheDocument();
     expect(screen.getByRole('dialog', { name: '2 comments' })).toBeInTheDocument();
     expect(screen.getByRole('textbox', { name: 'Add a comment' })).toHaveValue('');
@@ -107,5 +123,39 @@ describe('CommentsSheet', () => {
     expect(await screen.findByText(/No comments yet/)).toBeInTheDocument();
     await user.keyboard('{Escape}');
     expect(onClose).toHaveBeenCalled();
+  });
+
+  it('likes comments and opens the author’s profile', async () => {
+    mocked.likeComment.mockResolvedValue({ liked: true, likes: 3 });
+    mocked.comments.mockResolvedValue({ comments: [comment(1, 'Absolute classic', false, { likes: 2 })], nextCursor: null, total: 1 });
+    const { onOpenUser, user } = renderSheet();
+    const like = await screen.findByRole('button', { name: 'Like comment (2)' });
+    await user.click(like);
+    expect(mocked.likeComment).toHaveBeenCalledWith(1, true);
+    expect(await screen.findByRole('button', { name: 'Like comment (3)' })).toHaveAttribute('aria-pressed', 'true');
+
+    await user.click(screen.getByRole('button', { name: 'Ania' }));
+    expect(onOpenUser).toHaveBeenCalledWith('ania');
+  });
+
+  it('shows replies and posts a reply into the thread', async () => {
+    mocked.comments.mockResolvedValue({ comments: [comment(1, 'Absolute classic', false, { replyCount: 1 })], nextCursor: null, total: 2 });
+    mocked.replies.mockResolvedValue({ replies: [comment(5, 'agreed', false, { parentId: 1 })] });
+    mocked.postComment.mockResolvedValue(comment(6, 'same', true, { parentId: 1 }));
+    const { onCountChange, user } = renderSheet();
+
+    await user.click(await screen.findByRole('button', { name: 'View 1 reply' }));
+    expect(await screen.findByText('agreed')).toBeInTheDocument();
+
+    await user.click(screen.getAllByRole('button', { name: 'Reply' })[0]!);
+    expect(screen.getByText(/Replying to/)).toHaveTextContent('Replying to Ania');
+    await user.type(screen.getByRole('textbox', { name: 'Add a comment' }), 'same');
+    await user.click(screen.getByRole('button', { name: 'Post comment' }));
+
+    expect(mocked.postComment).toHaveBeenCalledWith(song.id, 'same', 1);
+    expect(await screen.findByText('same')).toBeInTheDocument();
+    expect(screen.queryByText(/Replying to/)).not.toBeInTheDocument();
+    expect(screen.getByRole('dialog', { name: '3 comments' })).toBeInTheDocument();
+    expect(onCountChange).toHaveBeenCalledWith(1);
   });
 });

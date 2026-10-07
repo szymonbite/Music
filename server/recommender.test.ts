@@ -26,6 +26,7 @@ function candidate(overrides: Partial<Candidate> & Pick<Candidate, 'id' | 'artis
     trending: false,
     lastSeenAt: null,
     collab: 0,
+    friends: 0,
     ...overrides,
   };
 }

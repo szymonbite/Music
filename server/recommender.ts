@@ -2,10 +2,10 @@
 //
 // A listener's taste is built from weighted signals (favourites, likes, saves,
 // dislikes, quick skips...). Every candidate song is scored against that taste
-// by artist, genre and mood overlap, plus what like-minded listeners enjoyed,
-// general popularity, and a penalty for songs seen recently. A little
-// randomness and regular "explore" slots keep the feed from becoming an echo
-// chamber.
+// by artist, genre and mood overlap, artists similar to the ones they like,
+// what friends and like-minded listeners enjoyed, general popularity, and a
+// penalty for songs seen recently. A little randomness and regular "explore"
+// slots keep the feed from becoming an echo chamber.
 
 import { artistKeys, normalizeArtistName, primaryArtist, splitArtists } from './music.ts';
 
@@ -36,21 +36,33 @@ export interface Candidate {
   lastSeenAt: number | null;
   /** How many listeners with overlapping taste liked this song. */
   collab: number;
+  /** How many people this listener follows liked or saved this song. */
+  friends: number;
 }
 
 export interface TasteProfile {
   artists: Map<string, number>;
   genres: Map<string, number>;
   tags: Map<string, number>;
+  /** Artists similar to liked ones (key -> affinity 0..1 and the liked artist it came from). */
+  similar: Map<string, { score: number; via: string }>;
   /** Sum of positive signal weights; 0 means we know nothing yet. */
   strength: number;
 }
 
+export interface SimilarArtistRow {
+  artistKey: string;
+  similarKey: string;
+  score: number;
+}
+
 export interface ScoreParts {
   artist: number;
+  similar: number;
   genre: number;
   tag: number;
   collab: number;
+  friends: number;
   popularity: number;
   seen: number;
 }
@@ -61,6 +73,8 @@ export interface ScoredCandidate {
   parts: ScoreParts;
   /** Display name of the artist that matched the listener's taste, if any. */
   matchedArtist: string | null;
+  /** The liked artist that a similar-artist match came from. */
+  similarVia: string | null;
 }
 
 export interface FeedPick {
@@ -80,7 +94,7 @@ export const SIGNAL_WEIGHTS = {
   dislike: -3,
 } as const;
 
-const WEIGHTS = { artist: 1.5, genre: 1, tag: 0.5, collab: 0.8, popularity: 0.6 };
+const WEIGHTS = { artist: 1.5, similar: 1.1, genre: 1, tag: 0.5, collab: 0.8, friends: 0.9, popularity: 0.6 };
 const DAY = 24 * 60 * 60 * 1000;
 
 function add(map: Map<string, number>, key: string, value: number): void {
@@ -110,7 +124,24 @@ export function buildProfile(signals: TasteSignal[]): TasteProfile {
     const tagWeight = s.weight / Math.sqrt(Math.max(1, s.tags.length));
     for (const t of s.tags) add(tags, t, tagWeight);
   }
-  return { artists: normalize(artists), genres: normalize(genres), tags: normalize(tags), strength };
+  return { artists: normalize(artists), genres: normalize(genres), tags: normalize(tags), similar: new Map(), strength };
+}
+
+/**
+ * Spreads affinity from liked artists to artists similar to them (from
+ * Last.fm / Deezer), so the feed can reach beyond artists you already know.
+ * `names` maps artist keys to display names for "Similar to …" reasons.
+ */
+export function withSimilarArtists(profile: TasteProfile, rows: SimilarArtistRow[], names: Map<string, string>): TasteProfile {
+  const similar = new Map<string, { score: number; via: string }>();
+  for (const row of rows) {
+    const affinity = profile.artists.get(row.artistKey) ?? 0;
+    if (affinity <= 0 || (profile.artists.get(row.similarKey) ?? 0) < 0) continue;
+    const score = Math.min(1, affinity * row.score);
+    const current = similar.get(row.similarKey);
+    if (!current || score > current.score) similar.set(row.similarKey, { score, via: names.get(row.artistKey) ?? row.artistKey });
+  }
+  return { ...profile, similar };
 }
 
 function overlap(values: string[], affinity: Map<string, number>): number {
@@ -135,9 +166,23 @@ export function scoreCandidate(profile: TasteProfile, c: Candidate, now: number)
   }
   artist = clamp(artist, -1, 1);
 
+  // Artists similar to ones you like (only counts for artists you don't already like).
+  let similar = 0;
+  let similarVia: string | null = null;
+  if (artist <= 0.1) {
+    for (const key of artistKeys(c.artist)) {
+      const match = profile.similar.get(key);
+      if (match && match.score > similar) {
+        similar = match.score;
+        similarVia = match.via;
+      }
+    }
+  }
+
   const genre = overlap(c.genres, profile.genres);
   const tag = overlap(c.tags, profile.tags);
   const collab = Math.min(1, Math.log1p(c.collab) / Math.log1p(8));
+  const friends = Math.min(1, Math.log1p(c.friends) / Math.log1p(3));
   const popularity =
     0.6 * c.popularity + 0.4 * Math.min(1, Math.log1p(c.communityLikes) / Math.log1p(25)) + (c.trending ? 0.25 : 0);
 
@@ -149,13 +194,21 @@ export function scoreCandidate(profile: TasteProfile, c: Candidate, now: number)
 
   const score =
     WEIGHTS.artist * artist +
+    WEIGHTS.similar * similar +
     WEIGHTS.genre * genre +
     WEIGHTS.tag * tag +
     WEIGHTS.collab * collab +
+    WEIGHTS.friends * friends +
     WEIGHTS.popularity * popularity +
     seen;
 
-  return { candidate: c, score, parts: { artist, genre, tag, collab, popularity, seen }, matchedArtist };
+  return {
+    candidate: c,
+    score,
+    parts: { artist, similar, genre, tag, collab, friends, popularity, seen },
+    matchedArtist,
+    similarVia,
+  };
 }
 
 function hash(text: string): number {
@@ -186,6 +239,8 @@ function closestSeed(c: Candidate, seeds: TasteSignal[]): TasteSignal | null {
 export function explain(s: ScoredCandidate, seeds: TasteSignal[], explore: boolean): string {
   if (explore) return 'Something different to try';
   if (s.parts.artist > 0.3 && s.matchedArtist) return `Because you like ${s.matchedArtist}`;
+  if (s.parts.friends > 0) return 'Loved by people you follow';
+  if (s.parts.similar > 0.25 && s.similarVia) return `Similar to ${s.similarVia}`;
   if (s.parts.collab >= 0.3) return 'Loved by listeners with similar taste';
   if (s.parts.genre + s.parts.tag > 0.25) {
     const seed = closestSeed(s.candidate, seeds);

@@ -189,8 +189,66 @@ describe('FeedPlayer', () => {
     vi.advanceTimersByTime(3000);
     yt.emit('onStateChange', 2);
     vi.advanceTimersByTime(5000);
-    expect(player.takeWatchedSeconds()).toBeCloseTo(3, 0);
-    expect(player.takeWatchedSeconds()).toBe(0);
+    expect(player.takeReport().watchedSec).toBeCloseTo(3, 0);
+    expect(player.takeReport().watchedSec).toBe(0);
+  });
+
+  it('plays a 30 second highlight in preview mode, then hands over', async () => {
+    const { player, yt } = await mountedPlayer();
+    const onPreviewEnd = vi.fn();
+    player.setHandlers({ onPreviewEnd });
+    yt.emit('onReady');
+    player.load('song1111111', { startSeconds: 50, previewSeconds: 30 });
+    expect(player.getSnapshot().preview).toEqual({ start: 50, end: 80 });
+
+    yt.time = 50;
+    yt.emit('onStateChange', 1);
+    yt.time = 79;
+    vi.advanceTimersByTime(250);
+    expect(onPreviewEnd).not.toHaveBeenCalled();
+    yt.time = 80.1;
+    vi.advanceTimersByTime(250);
+    expect(onPreviewEnd).toHaveBeenCalledOnce();
+    vi.advanceTimersByTime(1000);
+    expect(onPreviewEnd).toHaveBeenCalledOnce();
+  });
+
+  it('sets the preview window at the estimated hook when the length was unknown', async () => {
+    const { player, yt } = await mountedPlayer();
+    yt.emit('onReady');
+    player.load('song1111111', { seekToHook: true, previewSeconds: 30 });
+    expect(player.getSnapshot().preview).toBeNull();
+    yt.emit('onStateChange', 1);
+    expect(player.getSnapshot().preview).toEqual({ start: 45, end: 75 });
+  });
+
+  it('switches to the full song on request', async () => {
+    const { player, yt } = await mountedPlayer();
+    const onPreviewEnd = vi.fn();
+    player.setHandlers({ onPreviewEnd });
+    yt.emit('onReady');
+    player.load('song1111111', { startSeconds: 50, previewSeconds: 30 });
+    yt.emit('onStateChange', 1);
+    player.playFull();
+    expect(player.getSnapshot().preview).toBeNull();
+    yt.time = 120;
+    vi.advanceTimersByTime(500);
+    expect(onPreviewEnd).not.toHaveBeenCalled();
+  });
+
+  it('turns "jumped there and kept listening" into a hook vote', async () => {
+    const { player, yt } = await mountedPlayer();
+    yt.emit('onReady');
+    player.load('song1111111', { startSeconds: 50, previewSeconds: 30 });
+    yt.emit('onStateChange', 1);
+    player.seek(92, { manual: true });
+    expect(player.getSnapshot().preview).toEqual({ start: 92, end: 122 });
+    vi.advanceTimersByTime(10_000);
+    expect(player.takeReport().hookSec).toBeUndefined();
+
+    player.seek(92, { manual: true });
+    vi.advanceTimersByTime(16_000);
+    expect(player.takeReport()).toMatchObject({ hookSec: 92 });
   });
 
   it('destroys the iframe on unmount', async () => {

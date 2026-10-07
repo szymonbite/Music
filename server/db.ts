@@ -144,6 +144,54 @@ const MIGRATIONS: string[] = [
     fetched_at INTEGER NOT NULL
   );
   `,
+  // v2: social features, learned hooks, similar artists, expired YouTube connections.
+  `
+  ALTER TABLE comments ADD COLUMN parent_id INTEGER REFERENCES comments(id) ON DELETE CASCADE;
+  CREATE INDEX comments_parent ON comments(parent_id, id);
+
+  CREATE TABLE comment_likes (
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    comment_id INTEGER NOT NULL REFERENCES comments(id) ON DELETE CASCADE,
+    created_at INTEGER NOT NULL,
+    PRIMARY KEY (user_id, comment_id)
+  );
+  CREATE INDEX comment_likes_comment ON comment_likes(comment_id);
+
+  CREATE TABLE follows (
+    follower_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    followee_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    created_at INTEGER NOT NULL,
+    PRIMARY KEY (follower_id, followee_id),
+    CHECK (follower_id != followee_id)
+  );
+  CREATE INDEX follows_followee ON follows(followee_id);
+
+  CREATE TABLE hook_votes (
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    song_id TEXT NOT NULL REFERENCES songs(id),
+    position_sec INTEGER NOT NULL,
+    created_at INTEGER NOT NULL,
+    PRIMARY KEY (user_id, song_id)
+  );
+  ALTER TABLE songs ADD COLUMN hook_sec INTEGER;
+
+  CREATE TABLE similar_artists (
+    artist_key TEXT NOT NULL,
+    similar_key TEXT NOT NULL,
+    similar_name TEXT NOT NULL,
+    score REAL NOT NULL,
+    PRIMARY KEY (artist_key, similar_key)
+  );
+
+  ALTER TABLE users ADD COLUMN yt_expired_at INTEGER;
+
+  CREATE TABLE daily_counters (
+    key TEXT NOT NULL,
+    day TEXT NOT NULL,
+    count INTEGER NOT NULL,
+    PRIMARY KEY (key, day)
+  );
+  `,
 ];
 
 export function openDb(file: string): DB {
@@ -220,4 +268,27 @@ export function transaction<T>(db: DB, fn: () => T): T {
 /** Builds "?, ?, ?" for an IN (...) clause. */
 export function placeholders(count: number): string {
   return Array.from({ length: count }, () => '?').join(', ');
+}
+
+/** True when the cache entry `key` is missing or older than maxAgeMs. */
+export function isDue(db: DB, key: string, maxAgeMs: number, now: number): boolean {
+  const row = get<{ fetched_at: number }>(db, 'SELECT fetched_at FROM fetch_log WHERE key = ?', [key]);
+  return !row || now - row.fetched_at >= maxAgeMs;
+}
+
+export function markFetched(db: DB, key: string, at: number): void {
+  run(db, 'INSERT INTO fetch_log (key, fetched_at) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET fetched_at = excluded.fetched_at', [key, at]);
+}
+
+/** Takes one unit from a per-day budget. Returns false (and takes nothing) once the day's budget is spent. */
+export function takeFromDailyBudget(db: DB, key: string, budget: number, now: number): boolean {
+  const day = new Date(now).toISOString().slice(0, 10);
+  const used = get<{ count: number }>(db, 'SELECT count FROM daily_counters WHERE key = ? AND day = ?', [key, day])?.count ?? 0;
+  if (used >= budget) return false;
+  run(
+    db,
+    'INSERT INTO daily_counters (key, day, count) VALUES (?, ?, 1) ON CONFLICT(key, day) DO UPDATE SET count = count + 1',
+    [key, day],
+  );
+  return true;
 }

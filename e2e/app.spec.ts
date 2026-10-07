@@ -126,13 +126,15 @@ test('the share sheet copies a link to the song', async ({ page, context }) => {
   await expect(page.getByRole('status')).toContainText('Link copied');
 });
 
-test('turning off "Skip intros" starts songs from the beginning', async ({ page }) => {
+test('with previews and "Skip intros" off, songs start from the beginning', async ({ page }) => {
   await onboard(page);
   await page.getByRole('link', { name: 'Me', exact: true }).click();
-  const skipIntros = page.getByRole('switch', { name: 'Skip intros' });
-  await expect(skipIntros).toHaveAttribute('aria-checked', 'true');
-  await skipIntros.click();
-  await expect(skipIntros).toHaveAttribute('aria-checked', 'false');
+  for (const name of ['Hook previews', 'Skip intros']) {
+    const toggle = page.getByRole('switch', { name });
+    await expect(toggle).toHaveAttribute('aria-checked', 'true');
+    await toggle.click();
+    await expect(toggle).toHaveAttribute('aria-checked', 'false');
+  }
 
   await page.getByRole('link', { name: 'For you', exact: true }).click();
   const songId = await page.locator(activeCard).getAttribute('data-song-id');
@@ -145,4 +147,5 @@ test('turning off "Skip intros" starts songs from the beginning', async ({ page 
   const calls = await ytCalls(page);
   expect(calls.some((c) => c.type === 'load' && c.startSeconds === 0)).toBe(true);
   expect(calls.some((c) => c.type === 'seek')).toBe(false);
+  await expect(page.locator(activeCard).getByRole('button', { name: 'Full song' })).toHaveCount(0);
 });

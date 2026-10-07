@@ -104,7 +104,7 @@ describe('connecting YouTube Music', () => {
 
     const me = (await laptop.agent.get('/api/me').expect(200)).body.me;
     expect(me.id).toBe(phone.me.id);
-    expect(me.counts).toEqual({ favorites: 1, likes: 1, saves: 0, comments: 1 });
+    expect(me.counts).toEqual({ favorites: 1, likes: 1, saves: 0, comments: 1, followers: 0, following: 0 });
   });
 
   it('disconnects and revokes the token', async () => {
@@ -186,7 +186,15 @@ describe('mirroring to YouTube Music', () => {
     google.failRefresh = true;
     const res = await agent.put(`/api/songs/${DESPACITO}/reaction`).send({ value: 1 }).expect(200);
     expect(res.body).toMatchObject({ reaction: 1, youtube: 'error' });
-    expect((await agent.get('/api/me').expect(200)).body.me.youtube).toBeNull();
+    const after = (await agent.get('/api/me').expect(200)).body.me;
+    expect(after.youtube).toBeNull();
+    expect(after.youtubeExpired).toBe(true);
+
+    // Reconnecting clears the flag and keeps the same profile.
+    google.failRefresh = false;
+    await connect(agent);
+    const reconnected = (await agent.get('/api/me').expect(200)).body.me;
+    expect(reconnected).toMatchObject({ youtubeExpired: false, youtube: { email: 'listener@example.com' } });
   });
 });
 

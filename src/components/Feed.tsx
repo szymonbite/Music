@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { FeedItem, ReactionValue } from '../../shared/types.ts';
-import { api } from '../api.ts';
+import type { FeedItem, FeedMode, ReactionValue } from '../../shared/types.ts';
+import { api, connectYouTubeUrl } from '../api.ts';
 import { FeedPlayer, hookStart, usePlayerValue, type PlayerSnapshot } from '../lib/feedPlayer.ts';
 import { errorMessage, prefersReducedMotion } from '../lib/format.ts';
+import { Link, useRouter } from '../router.tsx';
 import { useSession } from '../session.tsx';
 import { useToast } from '../toast.tsx';
 import { CommentsSheet } from './CommentsSheet.tsx';
@@ -10,22 +11,26 @@ import { Icon } from './Icon.tsx';
 import { Logo } from './Logo.tsx';
 import { ShareSheet } from './ShareSheet.tsx';
 import { SongCard } from './SongCard.tsx';
+import { UserSheet } from './UserSheet.tsx';
 
 const selectStatus = (s: PlayerSnapshot) => s.status;
 const selectMuted = (s: PlayerSnapshot) => s.muted;
 const selectNeedsGesture = (s: PlayerSnapshot) => s.needsGesture;
 
 const PAGE_SIZE = 8;
+const PREVIEW_SECONDS = 30;
 
-type SheetState = { kind: 'comments' | 'share'; item: FeedItem } | null;
+type SheetState = { kind: 'comments' | 'share'; item: FeedItem } | { kind: 'user'; userId: string } | null;
 
 /**
  * The vertical, snap-scrolling "For you" feed. Each card is one song; the
  * single shared YouTube player sits on whichever card is in view.
  */
-export function Feed({ startWith }: { startWith: string | null }) {
-  const { me } = useSession();
+export function Feed({ startWith, mode = 'forYou' }: { startWith: string | null; mode?: FeedMode }) {
+  const { me, update } = useSession();
+  const { navigate } = useRouter();
   const toast = useToast();
+  const [reconnectDismissed, setReconnectDismissed] = useState(false);
   const [player] = useState(() => new FeedPlayer());
   const [items, setItems] = useState<FeedItem[]>([]);
   const [active, setActive] = useState(0);
@@ -53,7 +58,13 @@ export function Feed({ startWith }: { startWith: string | null }) {
   const current = items[active];
   const currentId = current?.id ?? null;
   const currentDuration = current?.durationSec ?? null;
-  const { skipIntro, autoAdvance } = me.settings;
+  const currentHook = current?.hookSec ?? null;
+  const { skipIntro, autoAdvance, previewMode } = me.settings;
+  // Read through a ref so toggling previews doesn't restart the song that's playing.
+  const previewModeRef = useRef(previewMode);
+  useEffect(() => {
+    previewModeRef.current = previewMode;
+  }, [previewMode]);
 
   // One YouTube player for the whole feed.
   useEffect(() => {
@@ -67,6 +78,7 @@ export function Feed({ startWith }: { startWith: string | null }) {
       fetching.current = true;
       try {
         const { items: next } = await api.feed({
+          mode,
           limit: PAGE_SIZE,
           exclude: itemsRef.current.map((i) => i.id),
           startWith: initial ? (startWith ?? undefined) : undefined,
@@ -84,7 +96,7 @@ export function Feed({ startWith }: { startWith: string | null }) {
         fetching.current = false;
       }
     },
-    [startWith, toast],
+    [mode, startWith, toast],
   );
 
   useEffect(() => {
@@ -100,25 +112,30 @@ export function Feed({ startWith }: { startWith: string | null }) {
   const reportedRef = useRef<string | null>(null);
   useEffect(() => {
     const previous = reportedRef.current;
-    if (previous && previous !== currentId) api.seen(previous, player.takeWatchedSeconds());
+    if (previous && previous !== currentId) api.seen(previous, player.takeReport());
     reportedRef.current = currentId;
   }, [currentId, player]);
 
-  // ...then start the new one, near its hook if the listener wants that.
+  // ...then start the new one: at its hook (learned from listeners, or estimated) when previewing or
+  // skipping intros, and only for a 30 second highlight in preview mode.
   useEffect(() => {
     if (!currentId) return;
+    const previewing = previewModeRef.current;
+    const atHook = previewing || skipIntro;
     const known = currentDuration !== null && currentDuration > 0;
+    const start = !atHook ? 0 : currentHook !== null ? currentHook : known ? hookStart(currentDuration) : 0;
     player.load(currentId, {
-      startSeconds: skipIntro && known ? hookStart(currentDuration) : 0,
-      seekToHook: skipIntro && !known,
+      startSeconds: start,
+      seekToHook: atHook && currentHook === null && !known,
+      previewSeconds: previewing ? PREVIEW_SECONDS : null,
     });
-  }, [currentId, currentDuration, skipIntro, player]);
+  }, [currentId, currentDuration, currentHook, skipIntro, player]);
 
   // Report the last song when leaving the feed or closing the tab.
   useEffect(() => {
     const flush = () => {
       const id = reportedRef.current;
-      if (id) api.seen(id, player.takeWatchedSeconds());
+      if (id) api.seen(id, player.takeReport());
     };
     window.addEventListener('pagehide', flush);
     return () => {
@@ -167,6 +184,11 @@ export function Feed({ startWith }: { startWith: string | null }) {
           player.seek(0);
           player.play();
         }
+      },
+      onPreviewEnd: () => {
+        const preview = player.getSnapshot().preview;
+        if (autoAdvance) goTo(activeRef.current + 1);
+        else if (preview) player.seek(preview.start);
       },
       onError: (videoId, code) => {
         api.unavailable(videoId, code);
@@ -297,6 +319,18 @@ export function Feed({ startWith }: { startWith: string | null }) {
 
   const playerVisible = currentId !== null && !failed.has(currentId) && (status === 'playing' || status === 'paused');
 
+  const togglePreviews = () => {
+    const next = !previewMode;
+    if (!next) player.playFull();
+    update({ settings: { previewMode: next } })
+      .then(() => toast(next ? 'Previews on: 30 seconds of each song' : 'Previews off: full songs'))
+      .catch((err: unknown) => toast(errorMessage(err), 'error'));
+  };
+
+  const switchMode = (next: FeedMode) => {
+    if (next !== mode) navigate(next === 'friends' ? '/?tab=friends' : '/', { replace: true });
+  };
+
   return (
     <div className="feed-wrap">
       <div className="feed" ref={scrollRef} aria-label="Songs for you" aria-busy={phase === 'loading'}>
@@ -324,17 +358,49 @@ export function Feed({ startWith }: { startWith: string | null }) {
       </div>
 
       <header className="feed-top">
-        <Logo size={26} withName />
-        <button
-          type="button"
-          className="icon-btn icon-btn--glass"
-          aria-label={muted ? 'Unmute' : 'Mute'}
-          aria-pressed={muted}
-          onClick={() => player.setMuted(!muted)}
-        >
-          <Icon name={muted ? 'volumeOff' : 'volume'} />
-        </button>
+        <Logo size={26} />
+        <div className="feed-tabs" role="tablist" aria-label="Feed">
+          <button type="button" role="tab" aria-selected={mode === 'friends'} className="feed-tabs__tab" onClick={() => switchMode('friends')}>
+            Friends
+          </button>
+          <button type="button" role="tab" aria-selected={mode === 'forYou'} className="feed-tabs__tab" onClick={() => switchMode('forYou')}>
+            For you
+          </button>
+        </div>
+        <div className="feed-top__actions">
+          <button
+            type="button"
+            className="pill-toggle"
+            aria-label="Hook previews"
+            aria-pressed={previewMode}
+            title={previewMode ? 'Playing 30 second highlights' : 'Playing full songs'}
+            onClick={togglePreviews}
+          >
+            30s
+          </button>
+          <button
+            type="button"
+            className="icon-btn icon-btn--glass"
+            aria-label={muted ? 'Unmute' : 'Mute'}
+            aria-pressed={muted}
+            onClick={() => player.setMuted(!muted)}
+          >
+            <Icon name={muted ? 'volumeOff' : 'volume'} />
+          </button>
+        </div>
       </header>
+
+      {me.youtubeExpired && !reconnectDismissed && (
+        <div className="reconnect" role="status">
+          <span>Your YouTube Music connection expired.</span>
+          <a className="reconnect__action" href={connectYouTubeUrl('/')}>
+            Reconnect
+          </a>
+          <button type="button" className="icon-btn reconnect__close" aria-label="Dismiss" onClick={() => setReconnectDismissed(true)}>
+            <Icon name="close" size={18} />
+          </button>
+        </div>
+      )}
 
       {needsGesture && (
         <button type="button" className="unmute-pill" onClick={togglePlay}>
@@ -362,11 +428,20 @@ export function Feed({ startWith }: { startWith: string | null }) {
           </button>
         </div>
       )}
-      {phase === 'ready' && items.length === 0 && (
-        <div className="feed-status">
-          <p>No songs to show right now. Add a few favourites to get started.</p>
-        </div>
-      )}
+      {phase === 'ready' && items.length === 0 &&
+        (mode === 'friends' ? (
+          <div className="feed-status">
+            <Icon name="user" size={40} />
+            <p>Follow people to see the songs they like and save here.</p>
+            <Link to="/people" className="btn btn--primary">
+              Find people
+            </Link>
+          </div>
+        ) : (
+          <div className="feed-status">
+            <p>No songs to show right now. Add a few favourites to get started.</p>
+          </div>
+        ))}
 
       <p className="feed-hints" aria-hidden="true">
         <kbd>↑</kbd>
@@ -380,9 +455,13 @@ export function Feed({ startWith }: { startWith: string | null }) {
           onCountChange={(delta) =>
             patchItem(sheet.item.id, (i) => ({ ...i, stats: { ...i.stats, comments: Math.max(0, i.stats.comments + delta) } }))
           }
+          onOpenUser={(userId) => setSheet({ kind: 'user', userId })}
         />
       )}
       {sheet?.kind === 'share' && <ShareSheet song={sheet.item} onClose={closeSheet} />}
+      {sheet?.kind === 'user' && (
+        <UserSheet userId={sheet.userId} onClose={closeSheet} onPlay={(songId) => navigate(`/?song=${encodeURIComponent(songId)}`)} />
+      )}
     </div>
   );
 }

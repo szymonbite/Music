@@ -24,6 +24,7 @@ export default defineConfig({
       YOUTUBE_API_KEY: '',
       GOOGLE_CLIENT_ID: '',
       GOOGLE_CLIENT_SECRET: '',
+      SIMILAR_ARTISTS: 'off',
     },
   },
 });

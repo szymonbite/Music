@@ -1,28 +1,32 @@
 # Earworm 🎧
 
-**A TikTok-style music discovery app.** Pick a few songs you love (or import them from YouTube Music), then swipe through a full-screen feed of songs chosen for you. **Like**, **dislike**, **comment** and **save** as you go. Every reaction tunes what comes next, and it can all sync back to your YouTube Music account.
+**A TikTok-style music discovery app.** Pick a few songs you love (or import them from YouTube Music), then swipe through a full-screen feed of songs chosen for you. **Like**, **dislike**, **comment** and **save** as you go. Every reaction tunes what comes next, and it can all sync back to your YouTube Music account. Follow your friends to see what they're saving.
 
 ![Welcome, picking favourites, the feed and the comments sheet](docs/screenshots.png)
+
+![Hook preview in the feed, the Friends feed, a comment thread with likes and replies, and a friend's profile](docs/screenshots-social.png)
 
 <sub>Screenshots come from the end-to-end test harness, which uses placeholder artwork and a fake player because YouTube isn't reachable from CI. In a browser you get real thumbnails and music videos.</sub>
 
 ## What it does
 
-- **Vertical song feed.** Snap-scroll through songs, one per screen. Each plays automatically through the official YouTube player. Tap to pause, double-tap to like (with a heart burst), drag the progress bar to seek. Optionally start near the hook ("skip intros") and move on automatically when a song ends.
+- **Vertical song feed.** Snap-scroll through songs, one per screen. Each plays automatically through the official YouTube player. Tap to pause, double-tap to like (with a heart burst), drag the progress bar to seek.
+- **Hook previews.** Each song plays a 30-second window around its hook, then moves on, so you can judge a lot of songs quickly. Tap **Full song** to keep listening, or switch previews off with the **30s** pill. Earworm learns where the hook is: when listeners jump to a spot and keep listening for 15 seconds, that counts as a vote, and once two or more people have voted, the median becomes the song's hook for everyone. Until then it estimates the hook from the song's length.
 - **React to songs.**
   - ❤️ **Like** a song to get more like it.
   - 👎 **Dislike** a song to hide it and skip to the next one.
-  - 💬 **Comment** in a thread shared by all listeners, with quick emoji reactions.
+  - 💬 **Comment** in a thread shared by all listeners, with quick emoji reactions. Like comments and reply to them.
   - 🔖 **Save** a song to your library.
   - ↗️ **Share** a link that opens straight into that song, even for first-time visitors.
+- **Friends.** Find people on the **People** page and follow them. The **Friends** tab is a feed of songs the people you follow have liked and saved ("Saved by Ania and 2 others"). Their picks also get a boost in your For you feed. Tap a name or avatar to see someone's recent saves and likes. You can hide your own activity on the **Me** tab.
 - **Pick favourites to start.** Choose from popular songs by genre, search, or paste any YouTube / YouTube Music link (song or playlist).
 - **Connect YouTube Music** (optional):
   - Import your liked songs and playlists to choose favourites from.
   - Likes and dislikes become YouTube ratings, which YouTube Music shares.
   - Saved songs go into a private **“Earworm saves”** playlist.
   - Sign in again from another device and you get the same profile back.
-- **"For you" recommendations** that explain themselves ("Because you like Arctic Monkeys", "Because you liked “Mr. Brightside”"). See [How recommendations work](#how-recommendations-work).
-- **Library** with Saved, Liked, Favourites and Disliked lists (undo a dislike from here). **Profile** with your stats, sync toggles and playback settings.
+- **"For you" recommendations** that explain themselves ("Because you like Arctic Monkeys", "Similar to Tame Impala", "Loved by people you follow"). They reach beyond the artists you already know by looking up similar artists. See [How recommendations work](#how-recommendations-work).
+- **Library** with Saved, Liked, Favourites and Disliked lists (undo a dislike from here). **Profile** with your stats, followers, sync toggles, playback and privacy settings.
 - Works out of the box with a built-in catalogue of 433 well-known songs across 27 genres. Desktop gets keyboard shortcuts: <kbd>↑</kbd>/<kbd>↓</kbd>, <kbd>Space</kbd>, <kbd>L</kbd>, <kbd>D</kbd>, <kbd>S</kbd>, <kbd>C</kbd>, <kbd>M</kbd>.
 
 ## Quick start
@@ -61,6 +65,8 @@ YouTube Music has no separate public API. It shares likes, ratings and playlists
 7. Restart `npm run dev`. The welcome screen now shows a **Connect YouTube Music** button.
 
 > **Going public?** `…/auth/youtube` is a *sensitive* scope. An unverified app is limited to 100 test users, and Google must verify the app before anyone else can sign in. Review the [YouTube API Services Terms and Developer Policies](https://developers.google.com/youtube/terms/developer-policies) too. See [Notes and limitations](#notes-and-limitations).
+>
+> **Testing mode expires connections after 7 days.** Earworm keeps the listener's profile and shows a **Reconnect** banner, and reconnecting picks up where they left off. [docs/DEPLOY.md](docs/DEPLOY.md#3-set-up-google-connect-youtube-music) explains how to avoid it.
 
 ### What gets synced
 
@@ -82,7 +88,9 @@ The YouTube Data API gives each Google Cloud project **10,000 units per day** by
 | Import likes / playlists, load a playlist     | 1 unit per page of 50 |
 | Trending chart, artist uploads (discovery)   | 1–2 units   |
 | Like, dislike, save, unsave (sync)            | 50 units    |
-| YouTube search (picker, optional discovery)   | 100 units   |
+| YouTube search (picker, discovery)            | 100 units   |
+
+Discovery searches (songs by similar artists, genre search) share a daily cap, `YOUTUBE_DAILY_SEARCH_BUDGET` (default 30 searches, at most 3,000 units). Each artist's results are cached for two weeks.
 
 ## How recommendations work
 
@@ -92,16 +100,21 @@ All of the ranking lives in [`server/recommender.ts`](server/recommender.ts) as 
    - Favourites +3, likes +2, saves +1.5, imported YouTube likes and playlists +1.
    - Listening for 45 seconds or more counts +0.5. Skipping within 5 seconds counts −0.5.
    - Dislikes count −3.
-2. **Scoring.** Each candidate song is scored on:
+2. **Similar artists.** For your top artists, Earworm looks up similar artists from [Last.fm](https://www.last.fm/api) (with a free API key) or Deezer's public API (no key needed). Results are cached for 30 days. Affinity spreads from artists you like to their neighbours, unless you've disliked those.
+3. **Scoring.** Each candidate song is scored on:
    - Artist match (featured artists count too), plus genre and mood overlap.
-   - What listeners with overlapping taste liked (collaborative filtering).
+   - Similarity to artists you like, for artists you haven't heard on Earworm yet.
+   - What the people you follow liked and saved, and what listeners with overlapping taste liked (collaborative filtering).
    - Popularity, and whether it's trending on YouTube.
    - A penalty if you saw it recently.
-3. **Variety.** No artist twice in a row and at most two per batch. Every fifth song is an exploration pick from outside your usual taste, so the feed doesn't become an echo chamber.
-4. **More songs.** If a YouTube API key or a connected account is available, the server pulls in fresh candidates (throttled, see above):
+4. **Variety.** No artist twice in a row and at most two per batch. Every fifth song is an exploration pick from outside your usual taste, so the feed doesn't become an echo chamber.
+5. **More songs.** If a YouTube API key or a connected account is available, the server pulls in fresh candidates (throttled, see above):
    - Your region's trending music chart.
    - Recent uploads from the channels of artists you like.
+   - Songs by similar artists that aren't in the catalogue yet (up to two searches per refresh, within the daily search budget).
    - Optionally, a search in your top genre (`YOUTUBE_DISCOVERY_SEARCH=true`).
+
+The **Friends** feed is simpler: songs the people you follow liked or saved, most recent first, skipping ones you've disliked. Listeners who turned off **Show my likes & saves to followers** are left out.
 
 ## Scripts
 
@@ -128,18 +141,27 @@ All settings are environment variables and all are optional. See [`.env.example`
 | `YOUTUBE_API_KEY`          | –                      | Enables YouTube search, playlist links and discovery for everyone |
 | `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` | –     | Enables "Connect YouTube Music" |
 | `YOUTUBE_DISCOVERY_SEARCH` | `false`                | Spend search quota on genre-based discovery |
+| `YOUTUBE_DAILY_SEARCH_BUDGET` | `30`                | Max discovery searches per day across all listeners (100 units each) |
+| `LASTFM_API_KEY`           | –                      | Free [Last.fm key](https://www.last.fm/api/account/create) for better similar artists |
+| `SIMILAR_ARTISTS`          | `lastfm` if a key is set, else `deezer` | Similar-artist source: `lastfm`, `deezer` or `off` |
 | `COOKIE_SECURE`            | `true` if `APP_URL` is https | Send the session cookie over HTTPS only |
 | `TRUST_PROXY`              | –                      | Set when behind a reverse proxy (e.g. `1`) |
 
 ## Deploying
 
+**[docs/DEPLOY.md](docs/DEPLOY.md)** walks through putting Earworm on [Fly.io](https://fly.io) for a group of friends. It's one small machine that sleeps when idle, plus a 1 GB disk, for about $2–3 a month. The repo includes a ready [`Dockerfile`](Dockerfile) and [`fly.toml`](fly.toml).
+
+Any other host works if it gives you Node 22.13+ (or Docker) and a **persistent disk** for the SQLite file:
+
 ```bash
 npm ci
 npm run build
 APP_URL=https://earworm.example.com COOKIE_SECURE=true npm start
+# or
+docker build -t earworm . && docker run -p 8080:8080 -v earworm-data:/data --env-file .env earworm
 ```
 
-Run it on any host with Node 22.13+ and a **persistent disk** for the SQLite file. Serverless platforms with ephemeral filesystems won't keep your data. Put it behind HTTPS (and set `TRUST_PROXY` if a proxy terminates TLS). Remember to add the production redirect URI to your OAuth client.
+Serverless platforms with ephemeral filesystems won't keep your data. Put it behind HTTPS (and set `TRUST_PROXY` if a proxy terminates TLS). Remember to add the production redirect URI to your OAuth client.
 
 ## Project structure
 
@@ -147,9 +169,10 @@ Run it on any host with Node 22.13+ and a **persistent disk** for the SQLite fil
 server/                 Express API (TypeScript, run with tsx)
   index.ts              Entry point: config, database, Vite (dev) or static files (prod)
   app.ts                Routes are mounted under /api
-  routes/               me, auth (Google OAuth), feed, songs, social (reactions/saves/comments), library, youtube
+  routes/               me, auth (Google OAuth), feed, songs, social (reactions/saves/comments), people (follows), library, youtube
   recommender.ts        Taste profile + ranking (pure functions)
-  feed.ts               Loads signals and candidates from SQLite and builds the feed
+  feed.ts               Loads signals and candidates from SQLite and builds the For you and Friends feeds
+  similar.ts            Similar artists from Last.fm or Deezer, cached in SQLite
   youtube/client.ts     Google OAuth + YouTube Data API v3 client (fetch-based)
   youtube/service.ts    Token refresh, library import, sync, search, discovery
   db.ts                 node:sqlite helpers and schema migrations
@@ -157,9 +180,10 @@ server/                 Express API (TypeScript, run with tsx)
 src/                    React 19 web app (Vite)
   components/Feed.tsx   The snap-scrolling feed
   lib/feedPlayer.ts     One shared YouTube IFrame player for the whole feed
-  pages/                Welcome, pick favourites, library, profile
+  pages/                Welcome, pick favourites, library, people, profile
 shared/                 Types and helpers used by both sides
 e2e/                    Playwright tests and the fake YouTube player
+docs/DEPLOY.md          Step-by-step hosting guide (Fly.io)
 ```
 
 ## Notes and limitations
@@ -168,14 +192,15 @@ e2e/                    Playwright tests and the fake YouTube player
 - **Autoplay.** Browsers may block sound until you interact with the page. When that happens, Earworm plays muted and shows **Tap to unmute**.
 - **The demo catalogue** is a hand-curated list of popular music videos. If one is region-blocked or can't be embedded, the player reports it: the song is skipped right away and hidden for everyone once a second listener hits the same error. With an API key, the catalogue is also checked against YouTube at startup.
 - **Accounts.** Without a Google connection, a listener is an anonymous guest identified by a cookie. "Start over" clears it. OAuth tokens are stored in the SQLite database, so keep that file private.
-- **Comments** have length and rate limits but no moderation or reporting yet.
+- **Comments** have length and rate limits but no moderation or reporting yet. You can delete your own.
+- **Following is open.** Anyone can follow anyone, without approval. Turning off **Show my likes & saves to followers** hides your activity from the Friends feed and your profile.
+- **One machine.** SQLite keeps everything in one file, which comfortably serves a few dozen listeners. Don't scale it to several instances.
 
 ### Ideas for next steps
 
-- Comment likes and replies, plus reporting and moderation tools.
-- Follow other listeners and see what they're saving.
-- Smarter similarity (e.g. Last.fm "similar artists") to discover beyond the artists you already know.
-- Play only the hook (e.g. a 30-second preview) before the full song.
+- Reporting, blocking and moderation tools for comments and people.
+- Notifications when someone follows you or replies to your comment.
+- Shared playlists or "listening parties" with friends.
 
 ---
 

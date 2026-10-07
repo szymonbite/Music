@@ -17,6 +17,7 @@ export interface SongRow {
   popularity: number;
   trending_at: number | null;
   unavailable: number;
+  hook_sec: number | null;
   created_at: number;
   updated_at: number;
 }
@@ -62,6 +63,7 @@ export function rowToSong(row: SongRow): Song {
     tags: parseList(row.tags),
     thumbnailUrl: row.thumbnail_url ?? thumbnailUrl(row.id),
     source: row.source,
+    hookSec: row.hook_sec,
   };
 }
 
@@ -144,7 +146,7 @@ export function upsertSong(db: DB, input: SongInput, now: number): void {
   );
 }
 
-function escapeLike(term: string): string {
+export function escapeLike(term: string): string {
   return term.replace(/[\\%_]/g, (c) => `\\${c}`);
 }
 

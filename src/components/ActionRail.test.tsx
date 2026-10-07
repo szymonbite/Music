@@ -14,6 +14,7 @@ const song: FeedItem = {
   tags: [],
   thumbnailUrl: 'https://i.ytimg.com/vi/dQw4w9WgXcQ/hqdefault.jpg',
   source: 'catalog',
+  hookSec: null,
   stats: { likes: 1234, comments: 5, saves: 0 },
   me: { reaction: 0, saved: false, favorite: false },
   reason: 'Popular on Earworm',

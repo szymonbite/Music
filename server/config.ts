@@ -15,6 +15,12 @@ export interface AppConfig {
     clientSecret: string | null;
     /** Spend search quota (100 units/call) on genre-based discovery. */
     discoverySearch: boolean;
+    /** Max YouTube searches per day for discovery (each costs 100 of the 10,000 daily units). */
+    dailySearchBudget: number;
+  };
+  similarArtists: {
+    provider: 'lastfm' | 'deezer' | 'off';
+    lastfmApiKey: string | null;
   };
 }
 
@@ -43,6 +49,14 @@ export function loadConfig(
   const isProduction = argv.includes('--prod') || env.NODE_ENV === 'production';
   const appUrl = nonEmpty(env.APP_URL)?.replace(/\/+$/, '') ?? null;
   const databasePath = nonEmpty(env.DATABASE_PATH) ?? path.resolve('data', 'earworm.db');
+  const lastfmApiKey = nonEmpty(env.LASTFM_API_KEY);
+  const similarSetting = nonEmpty(env.SIMILAR_ARTISTS)?.toLowerCase();
+  const similarProvider =
+    similarSetting === 'off' || similarSetting === 'deezer' || (similarSetting === 'lastfm' && lastfmApiKey)
+      ? similarSetting
+      : lastfmApiKey
+        ? 'lastfm'
+        : 'deezer';
   return {
     port: Number(env.PORT) || 3000,
     isProduction,
@@ -55,6 +69,8 @@ export function loadConfig(
       clientId: nonEmpty(env.GOOGLE_CLIENT_ID),
       clientSecret: nonEmpty(env.GOOGLE_CLIENT_SECRET),
       discoverySearch: bool(env.YOUTUBE_DISCOVERY_SEARCH, false),
+      dailySearchBudget: Math.max(0, Number(env.YOUTUBE_DAILY_SEARCH_BUDGET ?? 30) || 0),
     },
+    similarArtists: { provider: similarProvider, lastfmApiKey },
   };
 }

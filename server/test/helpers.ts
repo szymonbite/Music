@@ -4,6 +4,7 @@ import { loadCatalog, seedCatalog, type CatalogEntry } from '../catalog.ts';
 import { loadConfig, type AppConfig } from '../config.ts';
 import type { AppContext } from '../context.ts';
 import { openDb } from '../db.ts';
+import { SimilarArtists, type SimilarArtistsProvider } from '../similar.ts';
 import { YouTubeClient, type FetchLike } from '../youtube/client.ts';
 import { YouTubeService } from '../youtube/service.ts';
 
@@ -27,6 +28,8 @@ export interface TestOptions {
   catalog?: CatalogEntry[];
   config?: Partial<AppConfig>;
   discoverySearch?: boolean;
+  dailySearchBudget?: number;
+  similar?: SimilarArtistsProvider;
 }
 
 /** A fully wired app on an in-memory database with a controllable clock. */
@@ -40,6 +43,7 @@ export function createTestApp(opts: TestOptions = {}) {
     db,
     now: clock,
     discoverySearch: opts.discoverySearch ?? false,
+    dailySearchBudget: opts.dailySearchBudget ?? 30,
     client: new YouTubeClient({
       apiKey: opts.apiKey ?? null,
       clientId: opts.oauth ? 'test-client-id' : null,
@@ -47,7 +51,8 @@ export function createTestApp(opts: TestOptions = {}) {
       fetch: opts.fetch ?? offline,
     }),
   });
-  const ctx: AppContext = { db, config, youtube, now: clock, random: seeded() };
+  const similar = new SimilarArtists({ db, now: clock, provider: opts.similar ?? null });
+  const ctx: AppContext = { db, config, youtube, similar, now: clock, random: seeded() };
   const app = createApp(ctx);
   return {
     app,

@@ -2,6 +2,7 @@ import { useEffect, useRef, type ReactNode } from 'react';
 import { BottomNav } from './components/BottomNav.tsx';
 import { FeedPage } from './pages/FeedPage.tsx';
 import { LibraryPage } from './pages/LibraryPage.tsx';
+import { PeoplePage } from './pages/PeoplePage.tsx';
 import { PickPage } from './pages/PickPage.tsx';
 import { ProfilePage } from './pages/ProfilePage.tsx';
 import { WelcomePage } from './pages/WelcomePage.tsx';
@@ -45,9 +46,10 @@ const ROUTES: Record<string, () => ReactNode> = {
   '/pick': () => <PickPage />,
   '/library': () => <LibraryPage />,
   '/me': () => <ProfilePage />,
+  '/people': () => <PeoplePage />,
 };
 
-const WITH_NAV = new Set(['/', '/library', '/me']);
+const WITH_NAV = new Set(['/', '/library', '/me', '/people']);
 
 function Shell() {
   const { me } = useSession();

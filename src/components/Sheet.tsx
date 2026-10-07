@@ -20,7 +20,7 @@ export function Sheet({ title, onClose, children, className = '' }: SheetProps) 
 
   useEffect(() => {
     const previouslyFocused = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    panelRef.current?.focus();
+    panelRef.current?.focus({ preventScroll: true });
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
         e.stopPropagation();
