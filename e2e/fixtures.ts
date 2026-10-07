@@ -58,7 +58,8 @@ export async function onboard(page: Page, name = 'Szymon'): Promise<void> {
   await page.goto('/');
   await expect(page.getByRole('heading', { name: 'Find your next earworm' })).toBeVisible();
   await page.getByLabel('What should we call you?').fill(name);
-  await page.getByRole('button', { name: 'Pick my favourite songs' }).click();
+  // When YouTube Music can be connected, the same button reads "Skip, I'll pick songs myself".
+  await page.getByRole('button', { name: /^(Pick my favourite songs|Skip, I’ll pick songs myself)$/ }).click();
   await expect(page.getByRole('heading', { name: 'Pick songs you love' })).toBeVisible();
   const tiles = page.locator('.tile[aria-pressed]');
   await expect(tiles.first()).toBeVisible();

@@ -4,7 +4,7 @@
 import wasmUrl from 'sql.js/dist/sql-wasm-browser.wasm?url';
 import { regionFromAcceptLanguage } from '../../server/users.ts';
 import { handleBackButton } from './backButton.ts';
-import { googleAuthPlugin, nativeFetch } from './native.ts';
+import { browserSignInPlugin, googleAuthPlugin, nativeFetch } from './native.ts';
 import { AutoSaver, indexedDbStorage } from './persist.ts';
 import { createLocalServer, type LocalServer } from './server.ts';
 import { openSqlJsDb } from './sqljs.ts';
@@ -24,6 +24,7 @@ export async function startLocalBackend(): Promise<LocalServer> {
     db,
     fetch: nativeFetch,
     googleAuth: googleAuthPlugin(),
+    browserSignIn: browserSignInPlugin(),
     youtubeApiKey: import.meta.env.VITE_YOUTUBE_API_KEY || null,
     lastfmApiKey: import.meta.env.VITE_LASTFM_API_KEY || null,
     region: regionFromAcceptLanguage(navigator.languages.join(',')),

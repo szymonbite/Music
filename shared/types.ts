@@ -108,6 +108,11 @@ export interface Features {
   social: boolean;
 }
 
+/** Android app: the "Desktop app" OAuth client used to sign in through the browser (the secret is never sent back). */
+export interface GoogleClientInfo {
+  clientId: string | null;
+}
+
 export interface MeResponse {
   me: Me;
   features: Features;

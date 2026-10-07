@@ -55,6 +55,8 @@ dependencies {
     implementation "androidx.core:core-splashscreen:$coreSplashScreenVersion"
     // Google sign-in for "Connect YouTube Music" (GoogleAuthPlugin.java).
     implementation "com.google.android.gms:play-services-auth:21.5.1"
+    // Google sign-in in a browser tab, for picking a YouTube profile (BrowserSignInPlugin.java).
+    implementation "androidx.browser:browser:1.8.0"
     implementation project(':capacitor-android')
     testImplementation "junit:junit:$junitVersion"
     androidTestImplementation "androidx.test.ext:junit:$androidxJunitVersion"

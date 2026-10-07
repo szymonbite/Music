@@ -2,7 +2,9 @@
 // the web server (server/): the same routes, recommender, YouTube sync and
 // database queries. What differs is the plumbing: requests arrive from api.ts
 // instead of over HTTP, the database is sql.js, there's exactly one listener,
-// and Google sign-in goes through Android (native.ts).
+// and Google sign-in goes through Android (native.ts): Google Play services by
+// default, or the phone's browser once a "Desktop app" OAuth client is set up,
+// because only the browser lets you pick a YouTube profile (Brand Account).
 
 import { loadCatalog, seedCatalog } from '../../server/catalog.ts';
 import type { AppConfig } from '../../server/config.ts';
@@ -17,10 +19,11 @@ import { songRoutes } from '../../server/routes/songs.ts';
 import { youtubeRoutes } from '../../server/routes/youtube.ts';
 import { DeezerProvider, LastFmProvider, SimilarArtists } from '../../server/similar.ts';
 import { createUser, getUser, type UserRow } from '../../server/users.ts';
-import { YOUTUBE_SCOPE, YouTubeClient, type FetchLike, type TokenResponse } from '../../server/youtube/client.ts';
+import { YOUTUBE_SCOPE, YouTubeApiError, YouTubeClient, type FetchLike, type TokenResponse } from '../../server/youtube/client.ts';
 import { YouTubeService, toHttpError } from '../../server/youtube/service.ts';
+import type { GoogleClientInfo } from '../../shared/types.ts';
 import { LocalResponse, Router, parseQuery, type LocalErrorHandler, type LocalHandler, type LocalRequest, type LocalRouter } from './express.ts';
-import type { AppIdentity, GoogleAuthPlugin, GoogleAuthResult } from './native.ts';
+import type { AppIdentity, BrowserSignInPlugin, GoogleAuthPlugin, GoogleAuthResult } from './native.ts';
 
 export interface LocalServerOptions {
   db: DB;
@@ -28,6 +31,8 @@ export interface LocalServerOptions {
   fetch: FetchLike;
   /** Android's Google sign-in, or null when it isn't available. */
   googleAuth: GoogleAuthPlugin | null;
+  /** Google sign-in through the phone's browser, or null when it isn't available. */
+  browserSignIn?: BrowserSignInPlugin | null;
   youtubeApiKey?: string | null;
   lastfmApiKey?: string | null;
   similarArtists?: 'lastfm' | 'deezer' | 'off';
@@ -56,6 +61,22 @@ function errorCode(err: unknown): string | undefined {
 function errorText(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
+
+function base64url(bytes: Uint8Array): string {
+  return btoa(String.fromCharCode(...bytes)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+
+function randomToken(bytes: number): string {
+  return base64url(globalThis.crypto.getRandomValues(new Uint8Array(bytes)));
+}
+
+/** PKCE: the challenge Google checks the verifier against when the code is exchanged. */
+async function codeChallenge(verifier: string): Promise<string> {
+  return base64url(new Uint8Array(await globalThis.crypto.subtle.digest('SHA-256', new TextEncoder().encode(verifier))));
+}
+
+const CLIENT_SETTING = 'google_oauth_client';
+const CLIENT_ID = /^[\w.-]+\.apps\.googleusercontent\.com$/;
 
 /** Google's status code, which the Android plugin passes along with a failure. */
 function googleStatus(err: unknown): number | undefined {
@@ -96,6 +117,7 @@ function googleError(err: unknown, app: AppIdentity | null): HttpError {
 
 export function createLocalServer(opts: LocalServerOptions): LocalServer {
   const { db, googleAuth } = opts;
+  const browserSignIn = opts.browserSignIn ?? null;
   const now = opts.now ?? (() => Date.now());
   const region = opts.region ?? 'US';
   const lastfmApiKey = opts.lastfmApiKey ?? null;
@@ -152,6 +174,16 @@ export function createLocalServer(opts: LocalServerOptions): LocalServer {
 
   seedCatalog(db, loadCatalog(), now());
 
+  // The "Desktop app" OAuth client for signing in through the browser, if one is set up.
+  const savedClient = (): { clientId: string; clientSecret: string } | null => {
+    const row = get<{ value: string }>(db, 'SELECT value FROM app_settings WHERE key = ?', [CLIENT_SETTING]);
+    return row ? (JSON.parse(row.value) as { clientId: string; clientSecret: string }) : null;
+  };
+  const applyClient = (client: { clientId: string; clientSecret: string } | null) =>
+    youtube.client.setOAuthClient(client?.clientId ?? null, client?.clientSecret ?? null);
+  applyClient(savedClient());
+  const browserSignInReady = () => Boolean(browserSignIn && youtube.client.oauthEnabled);
+
   /** The app's one listener, created on first launch (and again after "Erase my data"). */
   const listener = (): UserRow =>
     get<UserRow>(db, 'SELECT * FROM users ORDER BY created_at, id LIMIT 1') ?? createUser(db, { region }, now());
@@ -161,9 +193,74 @@ export function createLocalServer(opts: LocalServerOptions): LocalServer {
     res.json({ ok: true });
   });
 
-  // "Connect YouTube Music": Android shows Google's account picker, then we link the account.
+  local.get('/app/google-client', (_req, res) => {
+    res.json({ clientId: savedClient()?.clientId ?? null } satisfies GoogleClientInfo);
+  });
+
+  local.put('/app/google-client', (req, res) => {
+    const body = (req.body ?? {}) as { clientId?: unknown; clientSecret?: unknown };
+    const clientId = typeof body.clientId === 'string' ? body.clientId.trim() : '';
+    const clientSecret = typeof body.clientSecret === 'string' ? body.clientSecret.trim() : '';
+    if (!CLIENT_ID.test(clientId)) {
+      throw new HttpError(400, 'bad_client_id', 'That doesn’t look like a client ID. It ends in “.apps.googleusercontent.com”.');
+    }
+    if (!clientSecret || clientSecret.length > 200 || /\s/.test(clientSecret)) {
+      throw new HttpError(400, 'bad_client_secret', 'Paste the client secret too. It usually starts with “GOCSPX-”.');
+    }
+    const client = { clientId, clientSecret };
+    run(db, 'INSERT INTO app_settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value', [
+      CLIENT_SETTING,
+      JSON.stringify(client),
+    ]);
+    applyClient(client);
+    res.json({ clientId } satisfies GoogleClientInfo);
+  });
+
+  local.delete('/app/google-client', (_req, res) => {
+    run(db, 'DELETE FROM app_settings WHERE key = ?', [CLIENT_SETTING]);
+    applyClient(null);
+    res.status(204).end();
+  });
+
+  /** Signs in through the phone's browser, where Google lets you pick a YouTube profile. */
+  const connectInBrowser = async (user: UserRow, plugin: BrowserSignInPlugin): Promise<void> => {
+    const { redirectUri } = await plugin.start();
+    const state = randomToken(24);
+    const verifier = randomToken(48);
+    const url = youtube.client.authUrl({ redirectUri, state, codeChallenge: await codeChallenge(verifier) });
+    let result: Awaited<ReturnType<BrowserSignInPlugin['open']>>;
+    try {
+      result = await plugin.open({ url });
+    } catch (err) {
+      if (errorCode(err) === 'cancelled') throw new HttpError(400, 'cancelled', 'Connecting YouTube Music was cancelled.');
+      throw new HttpError(502, 'google_error', `Signing in through the browser didn’t work (${errorText(err)}).`);
+    }
+    if (result.error === 'access_denied') throw new HttpError(400, 'cancelled', 'Connecting YouTube Music was cancelled.');
+    if (result.error) throw new HttpError(502, 'google_error', `Google sign-in didn’t work (${result.error}).`);
+    if (!result.code || result.state !== state) throw new HttpError(400, 'invalid_state', 'That sign-in didn’t match. Please try again.');
+    try {
+      const { tokens, profile } = await youtube.completeLogin({ code: result.code, codeVerifier: verifier, redirectUri });
+      youtube.linkAccount(user, tokens, profile);
+    } catch (err) {
+      if (err instanceof YouTubeApiError && !(err.status >= 500)) {
+        throw new HttpError(
+          502,
+          'google_error',
+          `Google didn’t accept the sign-in (${err.reason ?? err.status}). Check the Desktop app client ID and secret on the Me tab.`,
+        );
+      }
+      throw toHttpError(err);
+    }
+  };
+
+  // "Connect YouTube Music": Google's account picker opens over the app, then we link the account.
   local.post('/auth/native', async (req, res) => {
     const user = req.user!;
+    if (browserSignIn && browserSignInReady()) {
+      await connectInBrowser(user, browserSignIn);
+      res.json(meResponse(ctx, getUser(db, user.id)!));
+      return;
+    }
     if (!googleAuth) throw new HttpError(404, 'youtube_login_disabled', 'Connecting YouTube Music only works in the Android app.');
     let tokens: TokenResponse;
     try {
@@ -176,6 +273,9 @@ export function createLocalServer(opts: LocalServerOptions): LocalServer {
       throw new HttpError(403, 'youtube_scope_missing', 'Earworm needs permission to manage your YouTube account to sync with YouTube Music.');
     }
     try {
+      // Play services renews these tokens itself; don't keep a refresh token from a browser sign-in.
+      run(db, 'UPDATE users SET yt_refresh_token = NULL WHERE id = ?', [user.id]);
+      user.yt_refresh_token = null;
       youtube.linkAccount(user, tokens, await youtube.verifiedProfile(tokens));
     } catch (err) {
       throw toHttpError(err);

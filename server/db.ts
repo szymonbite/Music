@@ -185,6 +185,13 @@ const MIGRATIONS: string[] = [
     PRIMARY KEY (key, day)
   );
   `,
+  // v3: settings for this installation (the Android app keeps its Google OAuth client here).
+  `
+  CREATE TABLE app_settings (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+  );
+  `,
 ];
 
 /** Brings the schema up to date. */

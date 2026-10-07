@@ -207,6 +207,120 @@ describe('connecting YouTube Music in the app', () => {
   });
 });
 
+describe('picking a YouTube profile by signing in through the browser', () => {
+  const CLIENT = { clientId: '123-abc.apps.googleusercontent.com', clientSecret: 'GOCSPX-test' };
+
+  /** Plays the browser: Google redirects back with a code (or whatever `answer` says). */
+  function fakeBrowser(answer: (url: URL) => { code?: string; state?: string; error?: string }) {
+    const opened: URL[] = [];
+    return {
+      opened,
+      plugin: {
+        start: async () => ({ redirectUri: 'http://127.0.0.1:43210/' }),
+        open: async ({ url }: { url: string }) => {
+          opened.push(new URL(url));
+          return answer(new URL(url));
+        },
+      },
+    };
+  }
+
+  async function sha256url(text: string): Promise<string> {
+    const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text)));
+    return Buffer.from(digest).toString('base64url');
+  }
+
+  it('keeps the Desktop app client, but never hands the secret back', async () => {
+    const { db, server } = await boot();
+    expect((await call<{ clientId: string | null }>(server, 'GET', '/app/google-client')).body.clientId).toBeNull();
+    expect((await call<{ error: string }>(server, 'PUT', '/app/google-client', { clientId: 'nope', clientSecret: 'x' })).body.error).toBe(
+      'bad_client_id',
+    );
+    expect((await call<{ error: string }>(server, 'PUT', '/app/google-client', { ...CLIENT, clientSecret: '' })).body.error).toBe(
+      'bad_client_secret',
+    );
+    const saved = await call<Record<string, unknown>>(server, 'PUT', '/app/google-client', CLIENT);
+    expect(saved.body).toEqual({ clientId: CLIENT.clientId });
+
+    // Still there after a restart.
+    const again = createLocalServer({ db, fetch: async () => new Response(), googleAuth: null, similarArtists: 'off' });
+    expect((await call<{ clientId: string }>(again, 'GET', '/app/google-client')).body.clientId).toBe(CLIENT.clientId);
+
+    expect((await call(server, 'DELETE', '/app/google-client')).status).toBe(204);
+    expect((await call<{ clientId: string | null }>(server, 'GET', '/app/google-client')).body.clientId).toBeNull();
+  });
+
+  it('asks Google for the profile picker, checks the answer, and keeps a refresh token', async () => {
+    const google = new FakeGoogle();
+    google.profile = { ...google.profile, sub: 'brand-account-1', name: 'My Music Channel' };
+    const playServices = fakeGoogleAuth(async () => ({ accessToken: 'play-services-token', grantedScopes: [YOUTUBE] }));
+    const browser = fakeBrowser((url) => ({ code: google.validCode, state: url.searchParams.get('state')! }));
+    const { server, advance } = await boot({ fetch: google.fetch, googleAuth: playServices, browserSignIn: browser.plugin });
+    await call(server, 'PUT', '/app/google-client', CLIENT);
+
+    const connected = await call<MeResponse>(server, 'POST', '/auth/native');
+    expect(connected.status).toBe(200);
+    expect(connected.body.me.youtube?.name).toBe('My Music Channel');
+    expect(playServices.authorize).not.toHaveBeenCalled();
+
+    const url = browser.opened[0]!;
+    expect(url.origin + url.pathname).toBe('https://accounts.google.com/o/oauth2/v2/auth');
+    expect(url.searchParams.get('prompt')).toBe('select_account consent');
+    expect(url.searchParams.get('client_id')).toBe(CLIENT.clientId);
+    expect(url.searchParams.get('redirect_uri')).toBe('http://127.0.0.1:43210/');
+    const exchange = new URLSearchParams(google.callsTo('/token', 'POST')[0]!.body!);
+    expect(exchange.get('client_secret')).toBe(CLIENT.clientSecret);
+    expect(exchange.get('redirect_uri')).toBe('http://127.0.0.1:43210/');
+    expect(await sha256url(exchange.get('code_verifier')!)).toBe(url.searchParams.get('code_challenge'));
+
+    // An hour later the refresh token keeps it going; Play services isn't involved.
+    advance(2 * 60 * 60 * 1000);
+    expect((await call(server, 'GET', '/youtube/library')).status).toBe(200);
+    expect(google.callsTo('/token', 'POST').map((c) => new URLSearchParams(c.body!).get('grant_type'))).toEqual([
+      'authorization_code',
+      'refresh_token',
+    ]);
+    expect(playServices.authorize).not.toHaveBeenCalled();
+  });
+
+  it('switching to another profile starts a fresh "Earworm saves" playlist', async () => {
+    const google = new FakeGoogle();
+    const browser = fakeBrowser((url) => ({ code: google.validCode, state: url.searchParams.get('state')! }));
+    const { db, server } = await boot({ fetch: google.fetch, googleAuth: null, browserSignIn: browser.plugin });
+    await call(server, 'PUT', '/app/google-client', CLIENT);
+    await call(server, 'POST', '/auth/native');
+    const me = await call<MeResponse>(server, 'GET', '/me');
+    db.prepare('UPDATE users SET yt_playlist_id = ? WHERE id = ?').run('PLmain', me.body.me.id);
+
+    google.profile = { ...google.profile, sub: 'brand-account-2', name: 'Other Channel' };
+    await call(server, 'POST', '/auth/native');
+    const row = db.prepare('SELECT google_sub, yt_playlist_id FROM users WHERE id = ?').get(me.body.me.id);
+    expect(row).toEqual({ google_sub: 'brand-account-2', yt_playlist_id: null });
+  });
+
+  it('turns cancels and mismatches into clear answers', async () => {
+    const google = new FakeGoogle();
+    const cases: [(url: URL) => { code?: string; state?: string; error?: string }, string][] = [
+      [() => ({ error: 'access_denied' }), 'cancelled'],
+      [() => ({ code: google.validCode, state: 'someone-elses-state' }), 'invalid_state'],
+      [(url) => ({ code: 'wrong-code', state: url.searchParams.get('state')! }), 'google_error'],
+    ];
+    for (const [answer, error] of cases) {
+      const { server } = await boot({ fetch: google.fetch, googleAuth: null, browserSignIn: fakeBrowser(answer).plugin });
+      await call(server, 'PUT', '/app/google-client', CLIENT);
+      expect((await call<{ error: string }>(server, 'POST', '/auth/native')).body.error).toBe(error);
+    }
+
+    const closed = {
+      start: async () => ({ redirectUri: 'http://127.0.0.1:43210/' }),
+      open: async () => Promise.reject(Object.assign(new Error('The sign-in page was closed'), { code: 'cancelled' })),
+    };
+    const { server } = await boot({ fetch: google.fetch, googleAuth: null, browserSignIn: closed });
+    await call(server, 'PUT', '/app/google-client', CLIENT);
+    expect((await call<{ error: string }>(server, 'POST', '/auth/native')).body.error).toBe('cancelled');
+  });
+});
+
 describe('the node:crypto stand-in', () => {
   it('makes ids and random values with Web Crypto', () => {
     expect(nodeCrypto.randomUUID()).toMatch(/^[0-9a-f-]{36}$/);

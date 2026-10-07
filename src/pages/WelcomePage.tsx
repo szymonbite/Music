@@ -81,6 +81,7 @@ export function WelcomePage() {
             <p className="fineprint">
               We’ll import your liked songs and playlists so you can pick favourites fast, and mirror your likes, dislikes and saves
               back to YouTube Music. You can turn syncing off anytime.
+              {APP_MODE && ' Using a YouTube profile that isn’t your main one? Skip this for now and set it up on the Me tab.'}
             </p>
           </>
         ) : (

@@ -160,9 +160,13 @@ export class YouTubeService {
   linkAccount(user: UserRow, tokens: TokenResponse, profile: GoogleUserInfo): void {
     run(
       this.db,
+      // Switching to a different Google account or YouTube profile drops the old one's refresh
+      // token and "Earworm saves" playlist (the CASEs see the row's previous google_sub).
       `UPDATE users SET google_sub = :sub, google_email = :email, google_name = :name, google_picture = :picture,
-         yt_access_token = :access, yt_refresh_token = COALESCE(:refresh, yt_refresh_token), yt_token_expires_at = :expires,
-         yt_discovered_at = NULL, yt_expired_at = NULL
+         yt_access_token = :access,
+         yt_refresh_token = COALESCE(:refresh, CASE WHEN google_sub = :sub THEN yt_refresh_token END),
+         yt_playlist_id = CASE WHEN google_sub IS NULL OR google_sub = :sub THEN yt_playlist_id END,
+         yt_token_expires_at = :expires, yt_discovered_at = NULL, yt_expired_at = NULL
        WHERE id = :id`,
       {
         id: user.id,
@@ -230,7 +234,9 @@ export class YouTubeService {
     }
     const now = this.now();
     if (user.yt_access_token && (user.yt_token_expires_at ?? 0) - 60_000 > now) return user.yt_access_token;
-    if (this.renewToken) {
+    // Accounts linked through the browser have a refresh token; ones linked through Android's
+    // own sign-in don't, and get fresh tokens from Google Play services instead.
+    if (this.renewToken && !user.yt_refresh_token) {
       const tokens = await this.renewToken(user);
       if (!tokens) {
         this.markExpired(user);
@@ -466,8 +472,10 @@ export class YouTubeService {
         try {
           return { status: 'ok' as const, itemId: await this.client.addToPlaylist(playlistId, songId, creds) };
         } catch (err) {
-          // The playlist was deleted on YouTube: make a new one and try again.
-          if (!(err instanceof YouTubeApiError && err.status === 404)) throw err;
+          // The playlist was deleted on YouTube, or belongs to a YouTube profile you used before:
+          // make a new one and try again.
+          const gone = err instanceof YouTubeApiError && (err.status === 404 || (err.status === 403 && !err.isQuota));
+          if (!gone) throw err;
           const fresh = await this.createSavesPlaylist(user, creds);
           return { status: 'ok' as const, itemId: await this.client.addToPlaylist(fresh, songId, creds) };
         }

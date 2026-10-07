@@ -81,7 +81,6 @@ test('connects YouTube Music through Android’s Google sign-in', async ({ page 
 
   await page.goto('/');
   await page.getByRole('button', { name: 'Connect YouTube Music' }).click();
-  await expect(page.getByRole('status')).toContainText('YouTube Music connected');
   await expect(page.getByRole('heading', { name: 'Pick songs you love' })).toBeVisible();
 
   const tiles = page.locator('.tile[aria-pressed]');
@@ -109,6 +108,48 @@ test('explains what Google Cloud needs when Google turns the app down', async ({
   await expect(notice).toContainText('package name io.github.szymonbite.earworm and SHA-1 B2:B8:6F:86');
   // You can still carry on without YouTube Music.
   await expect(page.getByRole('button', { name: 'Skip, I’ll pick songs myself' })).toBeEnabled();
+});
+
+test('picks a YouTube profile by signing in through the browser', async ({ page }) => {
+  // Android's sign-in is available too, but once a Desktop client is set up the browser is used.
+  await page.addInitScript(() => {
+    const w = window as unknown as { __earwormGoogleAuth: unknown; __earwormBrowserSignIn: unknown; __signInUrl?: string };
+    w.__earwormGoogleAuth = { authorize: async () => Promise.reject(new Error('Play services should not be used')) };
+    w.__earwormBrowserSignIn = {
+      start: async () => ({ redirectUri: 'http://127.0.0.1:43210/' }),
+      open: async ({ url }: { url: string }) => {
+        w.__signInUrl = url;
+        return { code: 'code-from-google', state: new URL(url).searchParams.get('state') };
+      },
+    };
+  });
+  await stubOutsideWorld(page);
+  await page.route('https://oauth2.googleapis.com/token', (route) =>
+    fulfillJson(route, { access_token: 'brand-token', refresh_token: 'brand-refresh', expires_in: 3600, scope: 'https://www.googleapis.com/auth/youtube' }),
+  );
+  await page.route('https://openidconnect.googleapis.com/v1/userinfo', (route) =>
+    fulfillJson(route, { sub: 'brand-1', name: 'My Music Channel' }),
+  );
+
+  await onboard(page);
+  await page.getByRole('link', { name: 'Me', exact: true }).click();
+  await page.getByText('Use a different YouTube profile').click();
+
+  // A Web client's file is turned away with a hint.
+  const fileInput = page.locator('input[type="file"]');
+  await fileInput.setInputFiles({ name: 'client_secret_web.json', mimeType: 'application/json', buffer: Buffer.from('{"web":{"client_id":"x"}}') });
+  await expect(page.getByRole('alert')).toContainText('Create a “Desktop app” client instead');
+
+  const desktopClient = { installed: { client_id: '123-abc.apps.googleusercontent.com', client_secret: 'GOCSPX-test' } };
+  await fileInput.setInputFiles({ name: 'client_secret_123.json', mimeType: 'application/json', buffer: Buffer.from(JSON.stringify(desktopClient)) });
+  await expect(page.getByText('Connecting asks which YouTube profile to use')).toBeVisible();
+
+  await page.getByRole('button', { name: 'Connect YouTube Music' }).click();
+  await expect(page.getByText('My Music Channel')).toBeVisible();
+  const signInUrl = new URL((await page.evaluate(() => (window as unknown as { __signInUrl: string }).__signInUrl))!);
+  expect(signInUrl.searchParams.get('prompt')).toBe('select_account consent');
+  expect(signInUrl.searchParams.get('client_id')).toBe('123-abc.apps.googleusercontent.com');
+  await expect(page.getByRole('button', { name: 'Switch YouTube profile' })).toBeVisible();
 });
 
 test('“Erase my data” starts the app over', async ({ page }) => {

@@ -7,6 +7,7 @@ import type {
   FeedResponse,
   FollowResponse,
   GenreCount,
+  GoogleClientInfo,
   LibraryKind,
   LibraryResponse,
   MePatch,
@@ -75,6 +76,11 @@ export const api = {
   disconnectYouTube: () => request<MeResponse>('POST', '/auth/google/disconnect'),
   /** Android app only: connects YouTube Music through Google's account picker. */
   connectYouTubeNative: () => request<MeResponse>('POST', '/auth/native'),
+  /** Android app only: the "Desktop app" OAuth client for signing in through the browser. */
+  googleClient: () => request<GoogleClientInfo>('GET', '/app/google-client'),
+  setGoogleClient: (clientId: string, clientSecret: string) =>
+    request<GoogleClientInfo>('PUT', '/app/google-client', { clientId, clientSecret }),
+  removeGoogleClient: () => request<void>('DELETE', '/app/google-client'),
 
   feed: (req: FeedRequest) => request<FeedResponse>('POST', '/feed', req),
   song: (id: string) => request<FeedItem>('GET', `/songs/${enc(id)}`),

@@ -4,6 +4,7 @@ import { api } from '../api.ts';
 import { Avatar } from '../components/Avatar.tsx';
 import { Icon } from '../components/Icon.tsx';
 import { Switch } from '../components/Switch.tsx';
+import { YouTubeProfileSetup } from '../components/YouTubeProfileSetup.tsx';
 import { errorMessage } from '../lib/format.ts';
 import { useConnectYouTube } from '../lib/useConnectYouTube.ts';
 import { APP_MODE } from '../platform.ts';
@@ -194,6 +195,12 @@ export function ProfilePage() {
             <button type="button" className="btn btn--ghost btn--small" disabled={busy} onClick={() => void disconnect()}>
               Disconnect YouTube Music
             </button>
+            {connectError && (
+              <p className="notice notice--error" role="alert">
+                {connectError}
+              </p>
+            )}
+            {APP_MODE && <YouTubeProfileSetup busy={busy} onSwitch={() => void connect()} />}
           </>
         ) : features.youtubeLogin ? (
           <>
@@ -212,6 +219,7 @@ export function ProfilePage() {
                 {connectError}
               </p>
             )}
+            {APP_MODE && <YouTubeProfileSetup busy={busy} onSwitch={() => void connect()} />}
           </>
         ) : (
           <p className="muted">

@@ -101,8 +101,8 @@ type Params = Record<string, string | number | boolean | undefined>;
 
 export class YouTubeClient {
   private readonly apiKey: string | null;
-  private readonly clientId: string | null;
-  private readonly clientSecret: string | null;
+  private clientId: string | null;
+  private clientSecret: string | null;
   private readonly fetchImpl: FetchLike;
   private readonly timeoutMs: number;
 
@@ -116,6 +116,12 @@ export class YouTubeClient {
 
   get oauthEnabled(): boolean {
     return Boolean(this.clientId && this.clientSecret);
+  }
+
+  /** Changes the OAuth client (the Android app lets you set one up after installing). */
+  setOAuthClient(clientId: string | null, clientSecret: string | null): void {
+    this.clientId = clientId;
+    this.clientSecret = clientSecret;
   }
 
   get apiKeyEnabled(): boolean {
@@ -133,7 +139,9 @@ export class YouTubeClient {
       scope: SCOPES.join(' '),
       access_type: 'offline',
       include_granted_scopes: 'true',
-      prompt: 'consent',
+      // select_account makes Google ask which account, then which YouTube profile (Brand Account)
+      // to use. With "consent" alone it can skip straight past both.
+      prompt: 'select_account consent',
       state: opts.state,
       code_challenge: opts.codeChallenge,
       code_challenge_method: 'S256',

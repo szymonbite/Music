@@ -43,6 +43,18 @@ If connecting fails, the app explains why and shows the exact package name and S
 
 > **The 7-day catch** from the web version applies here too. While the consent screen is in **Testing**, Google may ask you to sign in again after a week. Earworm shows a **Reconnect** banner, and one tap fixes it. Clicking **Publish app** on the consent screen avoids it. For personal use you don't need Google's verification: you'll see a "Google hasn't verified this app" warning once and continue via **Advanced**.
 
+### Using a YouTube profile that isn't your main one (Brand Account)
+
+Android's own Google sign-in always connects your Google account's main YouTube profile, and never asks which one. If you switch between profiles in the YouTube app (**profile picture → Switch account**) and use one that isn't the main one, Earworm can sign in through your browser instead. There, Google asks which profile to use. This needs one more client in the same Google Cloud project:
+
+1. Open **Google Auth Platform → Clients → Create client**.
+2. Choose **Desktop app**, give it any name (e.g. `Earworm browser sign-in`) and click **Create**.
+3. Click **Download JSON** right away. Google only shows the client secret once, when you create the client.
+4. Get that file onto your phone. In Earworm, open **Me → YouTube Music → Use a different YouTube profile → Load the downloaded file**. You can also paste the client ID and secret into the two fields there.
+5. Tap **Connect YouTube Music** (or **Switch YouTube profile** if you're already connected). Your browser opens Google's sign-in: pick your account, then your YouTube profile, then allow access. Tap **Return to Earworm** at the end.
+
+From then on, connecting and reconnecting always go through the browser, and Earworm remembers your profile choice. **Stop using browser sign-in** on the Me tab switches back to Android's sign-in.
+
 ## What's different from the website
 
 - **Just you.** There's no Friends tab, People page or followers. Comments work as notes to yourself.
@@ -117,6 +129,8 @@ The app's web bundle also runs in a desktop browser for development and tests: `
 | --- | --- |
 | "Google doesn't recognise this app yet" | Check the Android OAuth client: the package name and SHA-1 must match exactly. It must be in the same Google Cloud project as the consent screen. Give Google a few minutes after creating it. |
 | "Connecting YouTube Music was cancelled" when you didn't cancel | Google refused the app and reported it as a cancel. Usually your Google account isn't a test user (**Audience → Test users**), or there's no Android OAuth client with the package name and SHA-1 the app shows. |
+| Connected, but to the wrong YouTube profile | Set up browser sign-in (see [Using a YouTube profile that isn't your main one](#using-a-youtube-profile-that-isnt-your-main-one-brand-account)), then tap **Switch YouTube profile**. |
+| "Google didn't accept the sign-in" after picking your profile | The Desktop app client ID or secret is wrong, or the client is in a different Google Cloud project. Create a new Desktop app client and load its file again. |
 | "Access blocked" or "app not verified" while connecting | Add your Google account under **Test users** on the consent screen, or publish the app. |
 | Songs don't play (YouTube "error 153" or 152) | YouTube rejected the player. Update **Android System WebView** and **Chrome** from the Play Store, and make sure you're on the latest Earworm build. |
 | A song says it can't be played here | Some videos aren't allowed in other apps. Earworm skips them automatically. |

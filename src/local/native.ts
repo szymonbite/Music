@@ -32,11 +32,38 @@ export interface GoogleAuthPlugin {
   appIdentity?(): Promise<AppIdentity>;
 }
 
+/** What came back from Google's sign-in page (the query of its redirect). */
+export interface BrowserSignInResult {
+  code?: string;
+  state?: string;
+  error?: string;
+}
+
+/**
+ * Google sign-in through the phone's browser (BrowserSignInPlugin.java). Unlike
+ * Android's own sign-in, Google's web sign-in asks which YouTube profile (Brand
+ * Account) to use. Google redirects to a tiny server the app runs on
+ * 127.0.0.1, which is why this needs a "Desktop app" OAuth client.
+ */
+export interface BrowserSignInPlugin {
+  /** Starts listening for Google's redirect, and says where Google should send it. */
+  start(): Promise<{ redirectUri: string }>;
+  /** Opens the sign-in page. Fails with code "cancelled" if it's closed or times out. */
+  open(options: { url: string }): Promise<BrowserSignInResult>;
+}
+
 declare global {
   interface Window {
-    /** Lets browser tests stand in for the Android plugin. */
+    /** Let browser tests stand in for the Android plugins. */
     __earwormGoogleAuth?: GoogleAuthPlugin;
+    __earwormBrowserSignIn?: BrowserSignInPlugin;
   }
+}
+
+/** Sign-in through the phone's browser, or null when it isn't available (e.g. a desktop browser). */
+export function browserSignInPlugin(): BrowserSignInPlugin | null {
+  if (window.__earwormBrowserSignIn) return window.__earwormBrowserSignIn;
+  return Capacitor.isNativePlatform() ? registerPlugin<BrowserSignInPlugin>('BrowserSignIn') : null;
 }
 
 /** The Google sign-in plugin, or null when it isn't available (e.g. a desktop browser). */
