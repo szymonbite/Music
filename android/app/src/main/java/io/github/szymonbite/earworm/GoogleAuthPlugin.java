@@ -1,7 +1,11 @@
 package io.github.szymonbite.earworm;
 
-import android.app.Activity;
 import android.app.PendingIntent;
+import android.content.Intent;
+import android.content.pm.PackageInfo;
+import android.content.pm.PackageManager;
+import android.content.pm.Signature;
+import android.os.Build;
 import androidx.activity.result.ActivityResult;
 import androidx.activity.result.ActivityResultLauncher;
 import androidx.activity.result.IntentSenderRequest;
@@ -16,9 +20,12 @@ import com.google.android.gms.auth.api.identity.AuthorizationRequest;
 import com.google.android.gms.auth.api.identity.AuthorizationResult;
 import com.google.android.gms.auth.api.identity.Identity;
 import com.google.android.gms.common.api.ApiException;
+import com.google.android.gms.common.api.CommonStatusCodes;
 import com.google.android.gms.common.api.Scope;
+import java.security.MessageDigest;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Locale;
 
 /**
  * "Connect YouTube Music" in the Android app. Google doesn't allow its sign-in
@@ -36,6 +43,9 @@ public class GoogleAuthPlugin extends Plugin {
         new Scope("https://www.googleapis.com/auth/youtube")
     );
 
+    /** GoogleSignInStatusCodes.SIGN_IN_CANCELLED, which some Play services versions still use. */
+    private static final int SIGN_IN_CANCELLED = 12501;
+
     private ActivityResultLauncher<IntentSenderRequest> consentLauncher;
     private PluginCall pendingCall;
 
@@ -50,6 +60,8 @@ public class GoogleAuthPlugin extends Plugin {
     /**
      * Resolves with { accessToken, grantedScopes }. With interactive: false it never shows
      * anything, and rejects with code "consent_required" if the listener has to sign in again.
+     * Other failures reject with code "cancelled" or "google_error" and data { status }, Google's
+     * status code (10 means Google doesn't recognise the app: see appIdentity()).
      */
     @PluginMethod
     public void authorize(PluginCall call) {
@@ -71,24 +83,39 @@ public class GoogleAuthPlugin extends Plugin {
                 pendingCall = call;
                 consentLauncher.launch(new IntentSenderRequest.Builder(consent.getIntentSender()).build());
             })
-            .addOnFailureListener(e -> call.reject(e.getMessage(), "google_error", e));
+            .addOnFailureListener(e -> rejectWith(call, e));
+    }
+
+    /** The package name and signing certificate Google Cloud needs to recognise this app. */
+    @PluginMethod
+    public void appIdentity(PluginCall call) {
+        try {
+            JSObject response = new JSObject();
+            response.put("packageName", getContext().getPackageName());
+            response.put("sha1", signingCertificateSha1());
+            call.resolve(response);
+        } catch (Exception e) {
+            call.reject(e.getMessage(), e);
+        }
     }
 
     private void onConsentResult(ActivityResult activityResult) {
         PluginCall call = pendingCall;
         pendingCall = null;
         if (call == null) return;
-        if (activityResult.getResultCode() != Activity.RESULT_OK) {
-            call.reject("Connecting YouTube Music was cancelled", "cancelled");
+        // Google reports failures (not only a real "back") as a cancelled result, with the
+        // actual reason in the result intent, so always read it.
+        Intent data = activityResult.getData();
+        if (data == null) {
+            JSObject details = new JSObject();
+            details.put("status", CommonStatusCodes.CANCELED);
+            call.reject("Google closed the sign-in without an answer", "cancelled", null, details);
             return;
         }
         try {
-            AuthorizationResult result = Identity.getAuthorizationClient(getActivity()).getAuthorizationResultFromIntent(
-                activityResult.getData()
-            );
-            resolveWith(call, result);
+            resolveWith(call, Identity.getAuthorizationClient(getActivity()).getAuthorizationResultFromIntent(data));
         } catch (ApiException e) {
-            call.reject(e.getMessage(), "google_error", e);
+            rejectWith(call, e);
         }
     }
 
@@ -104,5 +131,33 @@ public class GoogleAuthPlugin extends Plugin {
         response.put("accessToken", token);
         response.put("grantedScopes", scopes);
         call.resolve(response);
+    }
+
+    private void rejectWith(PluginCall call, Exception e) {
+        int status = e instanceof ApiException ? ((ApiException) e).getStatusCode() : CommonStatusCodes.ERROR;
+        boolean cancelled = status == CommonStatusCodes.CANCELED || status == SIGN_IN_CANCELLED;
+        JSObject details = new JSObject();
+        details.put("status", status);
+        call.reject(e.getMessage(), cancelled ? "cancelled" : "google_error", e, details);
+    }
+
+    @SuppressWarnings("deprecation")
+    private String signingCertificateSha1() throws Exception {
+        PackageManager pm = getContext().getPackageManager();
+        String pkg = getContext().getPackageName();
+        Signature[] signatures;
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            PackageInfo info = pm.getPackageInfo(pkg, PackageManager.GET_SIGNING_CERTIFICATES);
+            signatures = info.signingInfo.getApkContentsSigners();
+        } else {
+            signatures = pm.getPackageInfo(pkg, PackageManager.GET_SIGNATURES).signatures;
+        }
+        byte[] digest = MessageDigest.getInstance("SHA-1").digest(signatures[0].toByteArray());
+        StringBuilder hex = new StringBuilder();
+        for (byte b : digest) {
+            if (hex.length() > 0) hex.append(':');
+            hex.append(String.format(Locale.US, "%02X", b));
+        }
+        return hex.toString();
     }
 }

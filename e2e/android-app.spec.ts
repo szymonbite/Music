@@ -94,6 +94,23 @@ test('connects YouTube Music through Android’s Google sign-in', async ({ page 
   await expect(page.getByRole('button', { name: 'Disconnect YouTube Music' })).toBeVisible();
 });
 
+test('explains what Google Cloud needs when Google turns the app down', async ({ page }) => {
+  await page.addInitScript(() => {
+    (window as unknown as { __earwormGoogleAuth: unknown }).__earwormGoogleAuth = {
+      authorize: async () => Promise.reject(Object.assign(new Error('16: '), { code: 'cancelled', data: { status: 16 } })),
+      appIdentity: async () => ({ packageName: 'io.github.szymonbite.earworm', sha1: 'B2:B8:6F:86' }),
+    };
+  });
+  await stubOutsideWorld(page);
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Connect YouTube Music' }).click();
+  const notice = page.getByRole('alert');
+  await expect(notice).toContainText('If you didn’t cancel it, Google turned the app down');
+  await expect(notice).toContainText('package name io.github.szymonbite.earworm and SHA-1 B2:B8:6F:86');
+  // You can still carry on without YouTube Music.
+  await expect(page.getByRole('button', { name: 'Skip, I’ll pick songs myself' })).toBeEnabled();
+});
+
 test('“Erase my data” starts the app over', async ({ page }) => {
   await stubOutsideWorld(page);
   await onboard(page);

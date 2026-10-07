@@ -20,7 +20,7 @@ import { createUser, getUser, type UserRow } from '../../server/users.ts';
 import { YOUTUBE_SCOPE, YouTubeClient, type FetchLike, type TokenResponse } from '../../server/youtube/client.ts';
 import { YouTubeService, toHttpError } from '../../server/youtube/service.ts';
 import { LocalResponse, Router, parseQuery, type LocalErrorHandler, type LocalHandler, type LocalRequest, type LocalRouter } from './express.ts';
-import type { GoogleAuthPlugin, GoogleAuthResult } from './native.ts';
+import type { AppIdentity, GoogleAuthPlugin, GoogleAuthResult } from './native.ts';
 
 export interface LocalServerOptions {
   db: DB;
@@ -57,22 +57,41 @@ function errorText(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
+/** Google's status code, which the Android plugin passes along with a failure. */
+function googleStatus(err: unknown): number | undefined {
+  const data = err && typeof err === 'object' && 'data' in err ? (err.data as { status?: unknown } | undefined) : undefined;
+  return typeof data?.status === 'number' ? data.status : undefined;
+}
+
 function tokensFrom(result: GoogleAuthResult): TokenResponse {
   return { access_token: result.accessToken, expires_in: NATIVE_TOKEN_SECONDS, scope: result.grantedScopes.join(' ') };
 }
 
-/** Explains why Android's Google sign-in failed, including the usual set-up mistake. */
-function googleError(err: unknown): HttpError {
-  if (errorCode(err) === 'cancelled') return new HttpError(400, 'cancelled', 'Connecting YouTube Music was cancelled.');
+/**
+ * Explains why Android's Google sign-in failed. Almost always it's the one-time
+ * Google Cloud setup, so spell out exactly what Google needs to see.
+ */
+function googleError(err: unknown, app: AppIdentity | null): HttpError {
+  const status = googleStatus(err);
   const message = errorText(err);
-  if (/^10\b|DEVELOPER_ERROR/.test(message)) {
+  const client = app
+    ? `an Android OAuth client with package name ${app.packageName} and SHA-1 ${app.sha1}`
+    : 'an Android OAuth client with Earworm’s package name and SHA-1 (see docs/ANDROID.md)';
+  if (status === 10 || /^10\b|DEVELOPER_ERROR/.test(message)) {
     return new HttpError(
       502,
       'google_setup',
-      'Google doesn’t recognise this app yet. Add an Android OAuth client with Earworm’s package name and SHA-1 in Google Cloud (see docs/ANDROID.md).',
+      `Google doesn’t recognise this app yet (error 10). In Google Cloud, create ${client}, in the same project as your OAuth consent screen. It can take a few minutes to start working.`,
     );
   }
-  return new HttpError(502, 'google_error', `Google sign-in didn’t work (${message}).`);
+  if (errorCode(err) === 'cancelled') {
+    return new HttpError(
+      400,
+      'cancelled',
+      `Connecting YouTube Music was cancelled${status !== undefined ? ` (Google status ${status})` : ''}. If you didn’t cancel it, Google turned the app down. Check that your Google account is listed as a test user on the OAuth consent screen (Audience), and that Google Cloud has ${client}.`,
+    );
+  }
+  return new HttpError(502, 'google_error', `Google sign-in didn’t work (${status !== undefined ? `status ${status}: ` : ''}${message}).`);
 }
 
 export function createLocalServer(opts: LocalServerOptions): LocalServer {
@@ -150,7 +169,8 @@ export function createLocalServer(opts: LocalServerOptions): LocalServer {
     try {
       tokens = tokensFrom(await googleAuth.authorize({ interactive: true }));
     } catch (err) {
-      throw googleError(err);
+      const app = (await googleAuth.appIdentity?.().catch(() => null)) ?? null;
+      throw googleError(err, app);
     }
     if (!tokens.scope?.split(' ').includes(YOUTUBE_SCOPE)) {
       throw new HttpError(403, 'youtube_scope_missing', 'Earworm needs permission to manage your YouTube account to sync with YouTube Music.');

@@ -8,6 +8,13 @@ export interface GoogleAuthResult {
   grantedScopes: string[];
 }
 
+/** What Google Cloud needs to know to recognise the app (its Android OAuth client). */
+export interface AppIdentity {
+  packageName: string;
+  /** Fingerprint of the certificate the installed app is signed with, e.g. "B2:B8:…". */
+  sha1: string;
+}
+
 /**
  * "Connect YouTube Music" on Android, through Google Play services' account
  * picker (android/app/src/main/java/.../GoogleAuthPlugin.java). Google blocks
@@ -17,9 +24,12 @@ export interface GoogleAuthPlugin {
   /**
    * Asks for access to the listener's YouTube account. With `interactive`, shows
    * the account picker and consent screen when needed; without it, fails with
-   * code "consent_required" instead. Fails with code "cancelled" if they back out.
+   * code "consent_required" instead. Other failures have code "cancelled" or
+   * "google_error", and Google's status code in `data.status` (10: Google doesn't
+   * recognise the app). Note that Google also reports some refusals as "cancelled".
    */
   authorize(options: { interactive: boolean }): Promise<GoogleAuthResult>;
+  appIdentity?(): Promise<AppIdentity>;
 }
 
 declare global {

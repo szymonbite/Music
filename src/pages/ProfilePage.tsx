@@ -33,7 +33,7 @@ const SHORTCUTS: [string, string][] = [
 export function ProfilePage() {
   const { me, features, update, replace, refresh } = useSession();
   const toast = useToast();
-  const connectYouTube = useConnectYouTube();
+  const { connect: connectYouTube, error: connectError } = useConnectYouTube();
   const [name, setName] = useState(me.displayName);
   const [busy, setBusy] = useState(false);
 
@@ -207,6 +207,11 @@ export function ProfilePage() {
             <button type="button" className="btn btn--youtube" disabled={busy} onClick={() => void connect()}>
               <Icon name="music" size={20} /> {me.youtubeExpired ? 'Reconnect YouTube Music' : 'Connect YouTube Music'}
             </button>
+            {connectError && (
+              <p className="notice notice--error" role="alert">
+                {connectError}
+              </p>
+            )}
           </>
         ) : (
           <p className="muted">

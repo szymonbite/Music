@@ -373,6 +373,8 @@ kbd {
 
 .notice--error {
   color: var(--danger);
+  overflow-wrap: anywhere;
+  user-select: text;
 }
 
 .chip {

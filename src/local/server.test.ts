@@ -179,15 +179,31 @@ describe('connecting YouTube Music in the app', () => {
 
   it('explains cancellations, a missing permission and an unregistered app', async () => {
     const google = new FakeGoogle();
+    const fail = (code: string, status: number) => async () =>
+      Promise.reject(Object.assign(new Error(`${status}: `), { code, data: { status } }));
     const cases: [() => Promise<{ accessToken: string; grantedScopes: string[] }>, number, string][] = [
-      [async () => Promise.reject(Object.assign(new Error('Cancelled'), { code: 'cancelled' })), 400, 'cancelled'],
+      [fail('cancelled', 16), 400, 'cancelled'],
       [async () => ({ accessToken: google.accessToken, grantedScopes: ['openid'] }), 403, 'youtube_scope_missing'],
+      [fail('google_error', 10), 502, 'google_setup'],
       [async () => Promise.reject(new Error('10: DEVELOPER_ERROR')), 502, 'google_setup'],
+      [fail('google_error', 7), 502, 'google_error'],
     ];
     for (const [result, status, error] of cases) {
       const { server } = await boot({ fetch: google.fetch, googleAuth: fakeGoogleAuth(result) });
       expect(await call<{ error: string }>(server, 'POST', '/auth/native')).toMatchObject({ status, body: { error } });
     }
+  });
+
+  it('tells you exactly what to register in Google Cloud when Google turns the app down', async () => {
+    const auth = {
+      authorize: async () => Promise.reject(Object.assign(new Error('16: '), { code: 'cancelled', data: { status: 16 } })),
+      appIdentity: async () => ({ packageName: 'io.github.example.earworm', sha1: 'AA:BB:CC' }),
+    };
+    const { server } = await boot({ googleAuth: auth });
+    const { body } = await call<{ message: string }>(server, 'POST', '/auth/native');
+    expect(body.message).toContain('Google status 16');
+    expect(body.message).toContain('test user');
+    expect(body.message).toContain('package name io.github.example.earworm and SHA-1 AA:BB:CC');
   });
 });
 

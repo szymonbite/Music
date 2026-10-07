@@ -12,7 +12,7 @@ export function WelcomePage() {
   const { me, features, update } = useSession();
   const { navigate } = useRouter();
   const toast = useToast();
-  const connectYouTube = useConnectYouTube();
+  const { connect: connectYouTube, error: connectError } = useConnectYouTube();
   const [name, setName] = useState(me.displayName);
   const [busy, setBusy] = useState(false);
 
@@ -73,6 +73,11 @@ export function WelcomePage() {
             <button type="button" className="btn btn--youtube btn--block" disabled={busy} onClick={() => void connect()}>
               <Icon name="music" size={20} /> Connect YouTube Music
             </button>
+            {connectError && (
+              <p className="notice notice--error" role="alert">
+                {connectError}
+              </p>
+            )}
             <p className="fineprint">
               We’ll import your liked songs and playlists so you can pick favourites fast, and mirror your likes, dislikes and saves
               back to YouTube Music. You can turn syncing off anytime.

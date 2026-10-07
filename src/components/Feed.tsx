@@ -1,9 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { FeedItem, FeedMode, ReactionValue } from '../../shared/types.ts';
-import { api } from '../api.ts';
+import { api, connectYouTubeUrl } from '../api.ts';
 import { FeedPlayer, hookStart, usePlayerValue, type PlayerSnapshot } from '../lib/feedPlayer.ts';
 import { errorMessage, prefersReducedMotion } from '../lib/format.ts';
-import { useConnectYouTube } from '../lib/useConnectYouTube.ts';
 import { APP_MODE } from '../platform.ts';
 import { Link, useRouter } from '../router.tsx';
 import { useSession } from '../session.tsx';
@@ -32,7 +31,6 @@ export function Feed({ startWith, mode = 'forYou' }: { startWith: string | null;
   const { me, features, update } = useSession();
   const { navigate } = useRouter();
   const toast = useToast();
-  const connectYouTube = useConnectYouTube();
   const [reconnectDismissed, setReconnectDismissed] = useState(false);
   const [player] = useState(() => new FeedPlayer());
   const [items, setItems] = useState<FeedItem[]>([]);
@@ -398,9 +396,15 @@ export function Feed({ startWith, mode = 'forYou' }: { startWith: string | null;
       {me.youtubeExpired && !reconnectDismissed && (
         <div className="reconnect" role="status">
           <span>Your YouTube Music connection expired.</span>
-          <button type="button" className="reconnect__action" onClick={() => void connectYouTube('/')}>
-            Reconnect
-          </button>
+          {APP_MODE ? (
+            <Link to="/me" className="reconnect__action">
+              Reconnect
+            </Link>
+          ) : (
+            <a className="reconnect__action" href={connectYouTubeUrl('/')}>
+              Reconnect
+            </a>
+          )}
           <button type="button" className="icon-btn reconnect__close" aria-label="Dismiss" onClick={() => setReconnectDismissed(true)}>
             <Icon name="close" size={18} />
           </button>

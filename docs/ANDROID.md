@@ -27,17 +27,19 @@ Earworm works without this, using its built-in catalogue. Connecting YouTube Mus
 The app uses Android's own Google account picker. Google first needs to know the app exists, so do this once (about 10 minutes):
 
 1. In the [Google Cloud Console](https://console.cloud.google.com/), create a project or reuse the one from the web version. Under **APIs & Services → Library**, enable **YouTube Data API v3**.
-2. Set up the **OAuth consent screen**:
-   - Choose **External**.
-   - Add the scopes `openid`, `…/auth/userinfo.email`, `…/auth/userinfo.profile` and `…/auth/youtube`.
-   - Under **Test users**, add your Google account.
-3. Go to **Credentials → Create credentials → OAuth client ID** and fill in:
+2. Set up the **OAuth consent screen**. Google Cloud now calls this section **Google Auth Platform**, with pages named Branding, Audience, Data access and Clients.
+   - Choose **External** (under **Audience**).
+   - Add the scopes `openid`, `…/auth/userinfo.email`, `…/auth/userinfo.profile` and `…/auth/youtube` (under **Data access**).
+   - Under **Audience → Test users**, add the Google account you'll use on the phone.
+3. Go to **Clients** (or **Credentials → Create credentials → OAuth client ID**) and create a client:
    - Application type: **Android**
    - Package name: `io.github.szymonbite.earworm`
    - SHA-1 certificate fingerprint: `B2:B8:6F:86:67:9A:A1:3A:F1:9D:56:B5:9F:D4:AB:EB:DE:CD:DC:85`
 4. In the app, open **Me → Connect YouTube Music**, pick your account and allow access.
 
 That's all. There's no client secret, and nothing to type into the app. Google can take a few minutes to recognise a new client.
+
+If connecting fails, the app explains why and shows the exact package name and SHA-1 the installed app has, so you can compare them with Google Cloud.
 
 > **The 7-day catch** from the web version applies here too. While the consent screen is in **Testing**, Google may ask you to sign in again after a week. Earworm shows a **Reconnect** banner, and one tap fixes it. Clicking **Publish app** on the consent screen avoids it. For personal use you don't need Google's verification: you'll see a "Google hasn't verified this app" warning once and continue via **Advanced**.
 
@@ -114,6 +116,7 @@ The app's web bundle also runs in a desktop browser for development and tests: `
 | What you see | What to do |
 | --- | --- |
 | "Google doesn't recognise this app yet" | Check the Android OAuth client: the package name and SHA-1 must match exactly. It must be in the same Google Cloud project as the consent screen. Give Google a few minutes after creating it. |
+| "Connecting YouTube Music was cancelled" when you didn't cancel | Google refused the app and reported it as a cancel. Usually your Google account isn't a test user (**Audience → Test users**), or there's no Android OAuth client with the package name and SHA-1 the app shows. |
 | "Access blocked" or "app not verified" while connecting | Add your Google account under **Test users** on the consent screen, or publish the app. |
 | Songs don't play (YouTube "error 153" or 152) | YouTube rejected the player. Update **Android System WebView** and **Chrome** from the Play Store, and make sure you're on the latest Earworm build. |
 | A song says it can't be played here | Some videos aren't allowed in other apps. Earworm skips them automatically. |
