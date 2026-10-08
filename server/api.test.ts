@@ -102,6 +102,19 @@ describe('favourites and the feed', () => {
     expect(rockish.length).toBeGreaterThanOrEqual(6);
   });
 
+  it('keeps fresh picks to one every 30 songs while you scroll', async () => {
+    const { listener } = createTestApp();
+    const { agent } = await listener();
+    await agent.put('/api/favorites').send({ songIds: [NIRVANA, KILLERS, ARCTIC] }).expect(200);
+    const shown: FeedItem[] = [];
+    for (let batch = 0; batch < 8; batch++) {
+      const res = await agent.post('/api/feed').send({ limit: 8, exclude: shown.map((i) => i.id) }).expect(200);
+      shown.push(...(res.body.items as FeedItem[]));
+    }
+    expect(shown).toHaveLength(64);
+    expect(shown.flatMap((item, i) => (item.reason === 'Fresh pick for you' ? [i] : []))).toEqual([29, 59]);
+  });
+
   it('does not resend songs the client already has', async () => {
     const { listener } = createTestApp();
     const { agent } = await listener();

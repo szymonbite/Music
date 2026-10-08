@@ -19,6 +19,8 @@ export interface UserRow {
   yt_playlist_id: string | null;
   yt_discovered_at: number | null;
   yt_expired_at: number | null;
+  /** Songs served in the "For you" feed since its last fresh pick (see recommender.ts). */
+  songs_since_fresh: number;
 }
 
 export const DEFAULT_SETTINGS: UserSettings = {

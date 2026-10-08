@@ -192,6 +192,10 @@ const MIGRATIONS: string[] = [
     value TEXT NOT NULL
   );
   `,
+  // v4: fresh picks are rationed across feed batches (one per 30 songs).
+  `
+  ALTER TABLE users ADD COLUMN songs_since_fresh INTEGER NOT NULL DEFAULT 0;
+  `,
 ];
 
 /** Brings the schema up to date. */

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildProfile, pickFeed, scoreCandidate, type Candidate, type TasteSignal } from './recommender.ts';
+import { buildProfile, pickFeed, scoreCandidate, type Candidate, type FeedPick, type TasteSignal } from './recommender.ts';
 
 const NOW = Date.UTC(2026, 9, 7);
 
@@ -92,8 +92,8 @@ describe('pickFeed', () => {
   ];
 
   it('fills the batch with taste matches first and keeps artists varied', () => {
-    const picks = pickFeed({ profile: buildProfile(rockFan), candidates: pool, signals: rockFan, limit: 6, now: NOW, random: seeded() });
-    expect(picks).toHaveLength(6);
+    const picks = pickFeed({ profile: buildProfile(rockFan), candidates: pool, signals: rockFan, limit: 5, now: NOW, random: seeded() });
+    expect(picks).toHaveLength(5);
     const artists = picks.map((p) => p.candidate.artist);
     for (let i = 1; i < artists.length; i++) expect(artists[i]).not.toBe(artists[i - 1]);
     expect(artists.filter((a) => a === 'Arctic Monkeys').length).toBeLessThanOrEqual(2);
@@ -101,12 +101,48 @@ describe('pickFeed', () => {
     expect(picks[0]!.reason).toMatch(/^Because you (like|liked) /);
   });
 
-  it('mixes in something different every fifth song', () => {
-    const picks = pickFeed({ profile: buildProfile(rockFan), candidates: pool, signals: rockFan, limit: 10, now: NOW, random: seeded(7) });
-    expect(picks[4]!.explore).toBe(true);
-    expect(picks[4]!.reason).toBe('Something different to try');
-    expect(picks[9]!.explore).toBe(true);
-    expect(picks.filter((p) => p.explore)).toHaveLength(2);
+  /** Scrolls through `batches` feed batches of 8, the way the app loads them. */
+  function scroll(candidates: Candidate[], batches: number): FeedPick[] {
+    const shown: FeedPick[] = [];
+    let sinceFresh = 0;
+    for (let b = 0; b < batches; b++) {
+      const seen = new Set(shown.map((p) => p.candidate.id));
+      const picks = pickFeed({
+        profile: buildProfile(rockFan),
+        candidates: candidates.filter((c) => !seen.has(c.id)),
+        signals: rockFan,
+        limit: 8,
+        now: NOW,
+        random: seeded(b + 1),
+        sinceFresh,
+      });
+      for (const p of picks) sinceFresh = p.fresh ? 0 : sinceFresh + 1;
+      shown.push(...picks);
+    }
+    return shown;
+  }
+
+  it('mixes in one fresh pick every 30 songs, counting across batches', () => {
+    const rock = Array.from({ length: 80 }, (_, i) => candidate({ id: `r${i}`, artist: `Rock Band ${i}`, genres: ['rock', 'indie'] }));
+    const jazz = Array.from({ length: 30 }, (_, i) => candidate({ id: `j${i}`, artist: `Jazz Trio ${i}`, genres: ['jazz'] }));
+    const shown = scroll([...rock, ...jazz], 8);
+    expect(shown).toHaveLength(64);
+    expect(shown.flatMap((p, i) => (p.fresh ? [i] : []))).toEqual([29, 59]);
+    expect(shown.filter((p) => p.reason === 'Fresh pick for you')).toHaveLength(2);
+  });
+
+  it('falls back to fresh picks rather than running dry', () => {
+    const picks = pickFeed({
+      profile: buildProfile(rockFan),
+      candidates: [pool[3]!, pool[4]!, ...pool.slice(-4)],
+      signals: rockFan,
+      limit: 6,
+      now: NOW,
+      random: seeded(),
+    });
+    expect(picks).toHaveLength(6);
+    expect(picks.filter((p) => p.fresh)).toHaveLength(4);
+    expect(picks.slice(0, 2).every((p) => !p.fresh)).toBe(true);
   });
 
   it('explains genre matches with a liked song', () => {
@@ -135,7 +171,7 @@ describe('pickFeed', () => {
     });
     expect(picks[0]!.candidate.id).toBe('p1');
     expect(picks[0]!.reason).toBe('Popular on Earworm');
-    expect(picks.some((p) => p.explore)).toBe(false);
+    expect(picks[1]!.reason).toBe('Fresh pick for you');
   });
 
   it('returns what it can when the pool is small', () => {

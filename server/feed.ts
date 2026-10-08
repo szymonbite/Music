@@ -1,5 +1,5 @@
 import type { FeedItem } from '../shared/types.ts';
-import { all, type DB } from './db.ts';
+import { all, get, run, type DB } from './db.ts';
 import { normalizeArtistName, splitArtists } from './music.ts';
 import {
   buildProfile,
@@ -220,7 +220,12 @@ export function buildFeed(db: DB, userId: string, opts: BuildFeedOptions): FeedI
     .filter((c) => !exclude.has(c.id) && c.id !== opts.startWith)
     .map((c) => ({ ...c, collab: collab.get(c.id) ?? 0, friends: friends.get(c.id) ?? 0 }));
 
-  const picks = pickFeed({ profile, candidates, signals, limit, now, random });
+  // Fresh picks are rationed across batches, so remember how long ago the last one was.
+  const sinceFresh =
+    get<{ songs_since_fresh: number }>(db, 'SELECT songs_since_fresh FROM users WHERE id = ?', [userId])?.songs_since_fresh ?? 0;
+  const picks = pickFeed({ profile, candidates, signals, limit, now, random, sinceFresh });
+  const since = picks.reduce((n, pick) => (pick.fresh ? 0 : n + 1), sinceFresh);
+  run(db, 'UPDATE users SET songs_since_fresh = ? WHERE id = ?', [since, userId]);
   const rows: { row: SongRow; reason: string }[] = [];
 
   if (opts.startWith && !exclude.has(opts.startWith)) {

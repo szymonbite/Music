@@ -109,7 +109,7 @@ All of the ranking lives in [`server/recommender.ts`](server/recommender.ts) as 
    - What the people you follow liked and saved, and what listeners with overlapping taste liked (collaborative filtering).
    - Popularity, and whether it's trending on YouTube.
    - A penalty if you saw it recently.
-4. **Variety.** No artist twice in a row and at most two per batch. Every fifth song is an exploration pick from outside your usual taste, so the feed doesn't become an echo chamber.
+4. **Variety.** No artist twice in a row and at most two per batch. One song in every 30 is a **Fresh pick for you**: a song from outside your usual taste, so the feed doesn't become an echo chamber. Every other song has a reason connected to your taste. Fresh picks only appear more often if nothing that matches your taste is left.
 5. **More songs.** If a YouTube API key or a connected account is available, the server pulls in fresh candidates (throttled, see above):
    - Your region's trending music chart.
    - Recent uploads from the channels of artists you like.

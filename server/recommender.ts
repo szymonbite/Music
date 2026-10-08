@@ -4,8 +4,9 @@
 // dislikes, quick skips...). Every candidate song is scored against that taste
 // by artist, genre and mood overlap, artists similar to the ones they like,
 // what friends and like-minded listeners enjoyed, general popularity, and a
-// penalty for songs seen recently. A little randomness and regular "explore"
-// slots keep the feed from becoming an echo chamber.
+// penalty for songs seen recently. A little randomness, and one "fresh pick"
+// from outside the listener's taste every 30 songs, keep the feed from
+// becoming an echo chamber without filling it with songs they didn't ask for.
 
 import { artistKeys, normalizeArtistName, primaryArtist, splitArtists } from './music.ts';
 
@@ -81,8 +82,11 @@ export interface FeedPick {
   candidate: Candidate;
   score: number;
   reason: string;
-  explore: boolean;
+  /** Not chosen for the listener's taste. These are rationed: see PickOptions.freshEvery. */
+  fresh: boolean;
 }
+
+export const FRESH_PICK = 'Fresh pick for you';
 
 export const SIGNAL_WEIGHTS = {
   favorite: 3,
@@ -236,8 +240,8 @@ function closestSeed(c: Candidate, seeds: TasteSignal[]): TasteSignal | null {
   return close[hash(c.id) % close.length]!.seed;
 }
 
-export function explain(s: ScoredCandidate, seeds: TasteSignal[], explore: boolean): string {
-  if (explore) return 'Something different to try';
+/** Why a song suits the listener, or null when it isn't connected to their taste (a fresh pick). */
+export function tasteReason(s: ScoredCandidate, seeds: TasteSignal[]): string | null {
   if (s.parts.artist > 0.3 && s.matchedArtist) return `Because you like ${s.matchedArtist}`;
   if (s.parts.friends > 0) return 'Loved by people you follow';
   if (s.parts.similar > 0.25 && s.similarVia) return `Similar to ${s.similarVia}`;
@@ -248,7 +252,7 @@ export function explain(s: ScoredCandidate, seeds: TasteSignal[], explore: boole
   }
   if (s.candidate.trending) return 'Trending on YouTube';
   if (s.candidate.communityLikes >= 2) return 'Popular on Earworm';
-  return 'Fresh pick for you';
+  return null;
 }
 
 function shuffle<T>(items: T[], random: () => number): T[] {
@@ -266,13 +270,16 @@ export interface PickOptions {
   limit: number;
   now: number;
   random: () => number;
-  /** Every Nth slot is an exploration pick (default 5). */
-  exploreEvery?: number;
+  /** At most one fresh pick (a song not connected to the listener's taste) per this many songs. Default 30. */
+  freshEvery?: number;
+  /** Songs shown since the last fresh pick, carried over from earlier batches. Default 0. */
+  sinceFresh?: number;
 }
 
 export function pickFeed(opts: PickOptions): FeedPick[] {
   const { profile, candidates, signals, limit, now, random } = opts;
-  const exploreEvery = opts.exploreEvery ?? 5;
+  const freshEvery = opts.freshEvery ?? 30;
+  let sinceFresh = opts.sinceFresh ?? 0;
 
   const ranked = candidates
     .map((c) => {
@@ -282,10 +289,10 @@ export function pickFeed(opts: PickOptions): FeedPick[] {
     .sort((a, b) => b.total - a.total)
     .map((r) => r.scored);
 
-  // Exploration comes from outside the obvious top picks, but never from
+  // A fresh pick comes from outside the obvious top picks, but never from
   // artists or genres the listener has pushed away, nor from songs just seen.
   const headSize = limit * 3;
-  const explorePool = shuffle(
+  const freshPool = shuffle(
     ranked.slice(headSize).filter((s) => s.parts.artist >= 0 && s.parts.genre > -0.3 && s.parts.seen > -1),
     random,
   );
@@ -295,31 +302,44 @@ export function pickFeed(opts: PickOptions): FeedPick[] {
   const perArtist = new Map<string, number>();
   let previousArtist = '';
 
-  const accept = (s: ScoredCandidate, explore: boolean) => {
+  const reasons = new Map<string, string | null>();
+  const reasonFor = (s: ScoredCandidate): string | null => {
+    if (!reasons.has(s.candidate.id)) reasons.set(s.candidate.id, tasteReason(s, signals));
+    return reasons.get(s.candidate.id)!;
+  };
+
+  const accept = (s: ScoredCandidate, reason: string | null) => {
     const key = artistKeys(s.candidate.artist)[0] ?? '';
     used.add(s.candidate.id);
     perArtist.set(key, (perArtist.get(key) ?? 0) + 1);
     previousArtist = key;
-    picks.push({ candidate: s.candidate, score: s.score, reason: explain(s, signals, explore), explore });
+    const fresh = reason === null;
+    sinceFresh = fresh ? 0 : sinceFresh + 1;
+    picks.push({ candidate: s.candidate, score: s.score, reason: reason ?? FRESH_PICK, fresh });
   };
 
-  // Prefer variety: no artist twice in a row and at most two per batch.
-  const takeFrom = (pool: ScoredCandidate[], explore: boolean, strict: boolean): boolean => {
+  // "fresh" takes anything as a fresh pick, "taste" only songs with a taste reason, "any" whatever is left.
+  // Strict also prefers variety: no artist twice in a row and at most two per batch.
+  const takeFrom = (pool: ScoredCandidate[], mode: 'fresh' | 'taste' | 'any', strict: boolean): boolean => {
     for (const s of pool) {
       if (used.has(s.candidate.id)) continue;
       const key = artistKeys(s.candidate.artist)[0] ?? '';
       if (strict && (key === previousArtist || (perArtist.get(key) ?? 0) >= 2)) continue;
-      accept(s, explore);
+      const reason = mode === 'fresh' ? null : reasonFor(s);
+      if (mode === 'taste' && reason === null) continue;
+      accept(s, reason);
       return true;
     }
     return false;
   };
 
   while (picks.length < limit) {
-    const exploreSlot = profile.strength > 0 && picks.length % exploreEvery === exploreEvery - 1;
-    if (exploreSlot && takeFrom(explorePool, true, true)) continue;
-    if (takeFrom(ranked, false, true)) continue;
-    if (!takeFrom(ranked, false, false)) break;
+    const freshDue = profile.strength > 0 && sinceFresh >= freshEvery - 1;
+    if (freshDue && takeFrom(freshPool, 'fresh', true)) continue;
+    if (takeFrom(ranked, 'taste', true)) continue;
+    if (takeFrom(ranked, 'taste', false)) continue;
+    // Nothing connected to the listener's taste is left: better a fresh pick than an empty feed.
+    if (!takeFrom(ranked, 'any', false)) break;
   }
   return picks;
 }
