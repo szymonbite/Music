@@ -4,6 +4,7 @@ import { api } from '../api.ts';
 import { Avatar } from '../components/Avatar.tsx';
 import { Icon } from '../components/Icon.tsx';
 import { Switch } from '../components/Switch.tsx';
+import { UpdatePanel } from '../components/UpdatePanel.tsx';
 import { YouTubeProfileSetup } from '../components/YouTubeProfileSetup.tsx';
 import { errorMessage } from '../lib/format.ts';
 import { useConnectYouTube } from '../lib/useConnectYouTube.ts';
@@ -291,6 +292,8 @@ export function ProfilePage() {
           </dl>
         </section>
       )}
+
+      <UpdatePanel />
 
       <section className="profile__footer">
         <button type="button" className="btn btn--ghost btn--block btn--danger" onClick={() => void signOut()}>

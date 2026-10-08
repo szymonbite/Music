@@ -42,6 +42,8 @@ jobs:
           # Optional repository secrets. Anything here ends up inside the APK.
           VITE_YOUTUBE_API_KEY: ${{ secrets.YOUTUBE_API_KEY }}
           VITE_LASTFM_API_KEY: ${{ secrets.LASTFM_API_KEY }}
+          # Builds that get published can update themselves from the "android-latest" release.
+          VITE_UPDATE_URL: ${{ github.ref_name == github.event.repository.default_branch && format('https://github.com/{0}/releases/download/android-latest', github.repository) || '' }}
 
       - uses: actions/setup-java@v4
         with:
@@ -68,10 +70,18 @@ jobs:
           ./gradlew assembleRelease --no-daemon --stacktrace
           cp app/build/outputs/apk/release/app-release.apk "$GITHUB_WORKSPACE/earworm.apk"
 
+      - name: Describe the build for in-app updates
+        run: |
+          printf '{"versionCode": %s, "versionName": "1.0.%s", "apk": "earworm.apk", "sha256": "%s", "size": %s}\n' \
+            "$GITHUB_RUN_NUMBER" "$GITHUB_RUN_NUMBER" "$(sha256sum earworm.apk | cut -d' ' -f1)" "$(stat -c %s earworm.apk)" > version.json
+          cat version.json
+
       - uses: actions/upload-artifact@v4
         with:
           name: earworm-apk
-          path: earworm.apk
+          path: |
+            earworm.apk
+            version.json
 
       - name: Publish as the "android-latest" release
         if: github.ref_name == github.event.repository.default_branch
@@ -79,7 +89,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release delete android-latest --yes --cleanup-tag || true
-          gh release create android-latest earworm.apk \
+          gh release create android-latest earworm.apk version.json \
             --prerelease \
             --target "$GITHUB_SHA" \
             --title "Earworm for Android (latest build)" \

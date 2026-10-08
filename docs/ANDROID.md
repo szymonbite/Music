@@ -11,7 +11,9 @@ Your likes, saves, comments and favourites are stored on the phone. They survive
 3. Google Play Protect may warn that it doesn't know this app, because it isn't from the Play Store. Choose **More details → Install anyway**.
 4. Open **Earworm**.
 
-To update, install the newest `earworm.apk` the same way. It installs over the old version and keeps your data.
+**Updates install from inside the app.** Earworm checks for a newer version each time it starts. When there is one, a dot appears on **Me**. Open it and tap **Update now**, then **Install**. The first time, Android asks you to allow Earworm to install apps: allow it, go back and tap **Install**. Your data stays.
+
+The app downloads updates from this repository's [latest build](https://github.com/szymonbite/Music/releases/tag/android-latest) and checks each download's SHA-256 before installing. Android only accepts updates signed with the same key as the installed app. (Builds from before in-app updates need to be updated once by hand, the same way you installed them.)
 
 A new build is made automatically whenever code is pushed to the repository ([GitHub Actions](../.github/workflows/android.yml)).
 

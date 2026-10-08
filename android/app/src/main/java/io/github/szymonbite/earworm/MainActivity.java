@@ -13,6 +13,7 @@ public class MainActivity extends BridgeActivity {
         // App-specific plugins have to be registered before the bridge starts.
         registerPlugin(GoogleAuthPlugin.class);
         registerPlugin(BrowserSignInPlugin.class);
+        registerPlugin(AppUpdaterPlugin.class);
         super.onCreate(savedInstanceState);
 
         // Capacitor opens links to other sites in their own apps (e.g. "Open in YouTube Music").

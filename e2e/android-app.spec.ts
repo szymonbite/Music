@@ -152,6 +152,45 @@ test('picks a YouTube profile by signing in through the browser', async ({ page 
   await expect(page.getByRole('button', { name: 'Switch YouTube profile' })).toBeVisible();
 });
 
+test('offers a newer version and hands it to Android’s installer', async ({ page }) => {
+  await page.addInitScript(() => {
+    const w = window as unknown as { __earwormAppInfo: unknown; __earwormAppUpdater: unknown; __installed?: unknown };
+    w.__earwormAppInfo = { version: '1.0.3', build: '3' };
+    w.__earwormAppUpdater = { install: async (options: unknown) => void (w.__installed = options) };
+  });
+  await stubOutsideWorld(page);
+  const sha256 = 'b'.repeat(64);
+  await page.route('https://updates.earworm.test/android-latest/version.json', (route) =>
+    fulfillJson(route, { versionCode: 5, versionName: '1.0.5', apk: 'earworm.apk', sha256, size: 4_417_018 }),
+  );
+
+  await onboard(page);
+  // Found at start-up: "Me" gets a dot.
+  const me = page.getByRole('link', { name: 'Me, update available' });
+  await expect(me).toBeVisible();
+  await me.click();
+  await expect(page.getByText('Version 1.0.5 is ready (4.4 MB). You have 1.0.3.')).toBeVisible();
+  await page.getByRole('button', { name: 'Update now' }).click();
+  await expect
+    .poll(() => page.evaluate(() => (window as unknown as { __installed?: unknown }).__installed))
+    .toEqual({ url: 'https://updates.earworm.test/android-latest/earworm.apk', sha256 });
+});
+
+test('says when you already have the latest version', async ({ page }) => {
+  await page.addInitScript(() => {
+    (window as unknown as { __earwormAppInfo: unknown }).__earwormAppInfo = { version: '1.0.5', build: '5' };
+  });
+  await stubOutsideWorld(page);
+  await page.route('https://updates.earworm.test/android-latest/version.json', (route) =>
+    fulfillJson(route, { versionCode: 5, versionName: '1.0.5', apk: 'earworm.apk', sha256: 'b'.repeat(64), size: 1 }),
+  );
+  await onboard(page);
+  await page.getByRole('link', { name: 'Me', exact: true }).click();
+  await expect(page.getByText('Version 1.0.5 · You’re up to date')).toBeVisible();
+  await page.getByRole('button', { name: 'Check for updates' }).click();
+  await expect(page.getByText('Version 1.0.5 · You’re up to date')).toBeVisible();
+});
+
 test('“Erase my data” starts the app over', async ({ page }) => {
   await stubOutsideWorld(page);
   await onboard(page);

@@ -1,5 +1,6 @@
 import { useEffect, useRef, type ReactNode } from 'react';
 import { BottomNav } from './components/BottomNav.tsx';
+import { useUpdate } from './lib/updates.ts';
 import { FeedPage } from './pages/FeedPage.tsx';
 import { LibraryPage } from './pages/LibraryPage.tsx';
 import { PeoplePage } from './pages/PeoplePage.tsx';
@@ -40,6 +41,18 @@ function useOAuthNotice() {
   }, [connected, error, path, navigate, toast]);
 }
 
+/** Android app: mentions a new version once, when the start-up check finds it. */
+function useUpdateNotice() {
+  const update = useUpdate();
+  const toast = useToast();
+  const announced = useRef(false);
+  useEffect(() => {
+    if (update.status !== 'available' || announced.current) return;
+    announced.current = true;
+    toast(`Earworm ${update.update.versionName} is ready. Update it on the Me tab.`);
+  }, [update, toast]);
+}
+
 const ROUTES: Record<string, () => ReactNode> = {
   '/': () => <FeedPage />,
   '/welcome': () => <WelcomePage />,
@@ -55,6 +68,7 @@ function Shell() {
   const { me, features } = useSession();
   const { path, search } = useRouter();
   useOAuthNotice();
+  useUpdateNotice();
 
   const route = ROUTES[path];
   if (!route || (path === '/people' && !features.social)) return <Redirect to="/" />;

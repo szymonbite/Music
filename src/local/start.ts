@@ -3,14 +3,23 @@
 
 import wasmUrl from 'sql.js/dist/sql-wasm-browser.wasm?url';
 import { regionFromAcceptLanguage } from '../../server/users.ts';
+import { checkForUpdate, registerUpdater } from '../lib/updates.ts';
 import { handleBackButton } from './backButton.ts';
 import { browserSignInPlugin, googleAuthPlugin, nativeFetch } from './native.ts';
 import { AutoSaver, indexedDbStorage } from './persist.ts';
 import { createLocalServer, type LocalServer } from './server.ts';
 import { openSqlJsDb } from './sqljs.ts';
+import { createUpdater } from './updater.ts';
 
 export async function startLocalBackend(): Promise<LocalServer> {
   handleBackButton();
+  void createUpdater()
+    .then((updater) => {
+      if (!updater) return;
+      registerUpdater(updater);
+      return checkForUpdate({ quiet: true });
+    })
+    .catch((err: unknown) => console.warn('Update check failed:', err));
   const storage = indexedDbStorage();
   const db = await openSqlJsDb(await storage.load(), wasmUrl);
   const saver = new AutoSaver(db, storage);

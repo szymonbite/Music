@@ -38,6 +38,8 @@ export default defineConfig({
       url: `http://localhost:${APP_PORT}/`,
       reuseExistingServer: false,
       timeout: 120_000,
+      // Tests play the release page (see e2e/android-app.spec.ts).
+      env: { VITE_UPDATE_URL: 'https://updates.earworm.test/android-latest' },
     },
   ],
 });
